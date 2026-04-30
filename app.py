@@ -4,108 +4,128 @@ from bs4 import BeautifulSoup
 import re
 
 # ==========================================
-# LÓGICA DE PROGRAMACIÓN (BACKEND)
+# 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
+# ==========================================
+REPOSITORIOS_ANDALUCIA = {
+    "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "idUS (Sevilla)": {"url_base": "https://idus.us.es", "ruta_busqueda": "/xmlui/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "Digibug (Granada)": {"url_base": "https://digibug.ugr.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "RODIN (Cádiz)": {"url_base": "https://rodin.uca.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "riUAL (Almería)": {"url_base": "https://repositorio.ual.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "ruta_busqueda": "/xmlui/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
+    "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'}
+}
+
+# ==========================================
+# 2. LÓGICA DE PROGRAMACIÓN (BACKEND)
 # ==========================================
 
-def buscar_doi_en_helvia(doi):
+def buscar_doi_en_andalucia(doi):
     """
-    Fase 1: Busca un DOI en Helvia (UCO) y extrae su Handle.
+    Recorre el diccionario buscando el DOI en todos los repositorios.
+    Devuelve una lista con los repositorios donde se encontró.
     """
-    url_base = "https://helvia.uco.es"
-    url_busqueda = f"{url_base}/discover?query={doi}"
-    
-    # Simulamos ser un navegador para evitar bloqueos
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    
-    try:
-        respuesta = requests.get(url_busqueda, headers=headers, timeout=15)
-        respuesta.raise_for_status()
-        sopa = BeautifulSoup(respuesta.text, 'html.parser')
-        
-        # Buscamos el patrón del handle en los enlaces
-        enlaces = sopa.find_all('a', href=re.compile(r'handle/\d+/\d+'))
-        
-        if enlaces:
-            for enlace in enlaces:
-                match = re.search(r'handle/(\d+/\d+)', enlace['href'])
-                if match:
-                    return match.group(1), url_busqueda
-                    
-        return None, url_busqueda
-    except requests.exceptions.RequestException as e:
-        return f"Error", str(e)
+    resultados_encontrados = []
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
-def extraer_estadisticas_helvia(handle):
+    for nombre_repo, config in REPOSITORIOS_ANDALUCIA.items():
+        url_base = config["url_base"]
+        ruta_especifica = config["ruta_busqueda"].format(doi=doi)
+        url_busqueda = f"{url_base}{ruta_especifica}"
+        
+        try:
+            res = requests.get(url_busqueda, headers=headers, timeout=10)
+            res.raise_for_status()
+            sopa = BeautifulSoup(res.text, 'html.parser')
+            
+            patron_regex = config["patron_handle"]
+            enlaces = sopa.find_all('a', href=re.compile(patron_regex))
+            
+            if enlaces:
+                for enlace in enlaces:
+                    match = re.search(patron_regex, enlace['href'])
+                    if match:
+                        handle = match.group(1)
+                        # Guardamos los datos necesarios para la fase de estadísticas
+                        resultados_encontrados.append({
+                            "nombre_repo": nombre_repo,
+                            "url_base": url_base,
+                            "handle": handle
+                        })
+                        break # Solo necesitamos el primer handle válido de este repo
+                        
+        except Exception:
+            # Si un repositorio falla (caída del servidor, timeout), pasamos al siguiente silenciosamente
+            continue 
+
+    return resultados_encontrados
+
+def extraer_estadisticas_universales(url_base, handle):
     """
-    Fase 2 y 3: Visita la página de estadísticas del Handle 
-    y extrae el número buscando directamente la clase 'datacell'.
+    Visita la página de estadísticas de un repositorio concreto 
+    y extrae el número buscando la clase 'datacell'.
     """
-    url_estadisticas = f"https://helvia.uco.es/handle/{handle}/statistics"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
+    url_estadisticas = f"{url_base}/handle/{handle}/statistics"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        res = requests.get(url_estadisticas, headers=headers, timeout=15)
+        res = requests.get(url_estadisticas, headers=headers, timeout=10)
         res.raise_for_status()
         sopa = BeautifulSoup(res.text, 'html.parser')
         
-        # ESTRATEGIA DIRECTA: Gracias a tu análisis del HTML, sabemos que 
-        # los números de DSpace siempre usan la clase 'datacell'.
-        # BeautifulSoup es tan inteligente que si le pedimos 'datacell', 
-        # la encontrará aunque tenga otras clases al lado (como 'ds-table-cell').
         celda_numero = sopa.find('td', class_='datacell')
         
         if celda_numero:
-            # Extraemos el texto (el número) y limpiamos espacios
             numero_visualizaciones = celda_numero.get_text(strip=True)
             return numero_visualizaciones, url_estadisticas
             
-        return "Dato no encontrado en la tabla (no se detectó 'datacell')", url_estadisticas
+        return "Dato no encontrado", url_estadisticas
         
-    except requests.exceptions.RequestException as e:
-        return "Error de conexión", url_estadisticas
-    except Exception as e:
-        return "Error de lectura", url_estadisticas
+    except Exception:
+        return "Error al leer estadísticas", url_estadisticas
 
 # ==========================================
-# INTERFAZ DE USUARIO (FRONTEND EN STREAMLIT)
+# 3. INTERFAZ DE USUARIO (STREAMLIT)
 # ==========================================
 
-# Configuración básica de la página
-st.set_page_config(page_title="Helvia Tracker", page_icon="🎓")
-st.title("🎓 Estadísticas en Helvia (UCO)")
-st.write("Introduce el DOI para localizar el artículo y extraer sus visualizaciones.")
+st.set_page_config(page_title="Impacto Andalucía", page_icon="🌍", layout="centered")
+st.title("🌍 Buscador de Impacto: Red de Repositorios de Andalucía")
+st.write("Introduce un DOI para buscarlo simultáneamente en todas las universidades andaluzas y extraer sus estadísticas de visualización.")
 
-# Caja de texto para el usuario
 doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cells9061353")
 
-# Botón de acción
-if st.button("Obtener Estadísticas"):
+if st.button("Rastrear en Andalucía"):
     if doi_input:
-        # Iniciamos la Fase 1
-        with st.spinner("Paso 1: Localizando el artículo en Helvia..."):
-            handle, url_resultados = buscar_doi_en_helvia(doi_input)
+        with st.spinner("Buscando en 10 repositorios institucionales... Esto puede tardar unos segundos."):
+            # Fase 1: Buscar en toda la red
+            hallazgos = buscar_doi_en_andalucia(doi_input)
             
-            if handle == "Error":
-                st.error("Hubo un problema de conexión con los servidores de Helvia.")
-            elif handle:
-                st.success(f"¡Artículo localizado! Handle: `{handle}`")
-                
-                # Iniciamos la Fase 2 y 3
-                with st.spinner("Paso 2: Leyendo página de estadísticas..."):
-                    datos_visitas, url_stats = extraer_estadisticas_helvia(handle)
-                    
-                    if "Error" in datos_visitas or "no encontrado" in datos_visitas:
-                        st.warning(datos_visitas)
-                    else:
-                        # Mostramos el resultado final triunfalmente
-                        st.info(f"📊 **Visualizaciones totales:** {datos_visitas}")
-                        
-                    st.write(f"🔗 [Enlace directo a las estadísticas oficiales]({url_stats})")
+            if not hallazgos:
+                st.warning("No se ha encontrado este artículo en ninguno de los repositorios indexados con la configuración actual.")
             else:
-                st.warning("No se encontró este DOI en la base de datos de Helvia.")
+                st.success(f"¡Búsqueda finalizada! Artículo encontrado en {len(hallazgos)} repositorio(s).")
+                
+                # Fase 2: Mostrar resultados y extraer estadísticas para cada hallazgo
+                for item in hallazgos:
+                    nombre = item["nombre_repo"]
+                    url_base = item["url_base"]
+                    handle = item["handle"]
+                    
+                    # Usamos una caja expansible de Streamlit para que quede visualmente limpio
+                    with st.expander(f"📌 Resultados en: {nombre}", expanded=True):
+                        st.write(f"**Handle:** `{handle}`")
+                        
+                        # Extraemos las estadísticas específicas para esta universidad
+                        datos_visitas, url_stats = extraer_estadisticas_universales(url_base, handle)
+                        
+                        if "Error" in datos_visitas or "no encontrado" in datos_visitas:
+                            st.warning(f"Estadísticas: {datos_visitas}")
+                        else:
+                            st.info(f"📊 **Visualizaciones totales:** {datos_visitas}")
+                            
+                        st.write(f"🔗 [Ver estadísticas oficiales]({url_stats})")
     else:
-        st.error("Por favor, introduce un DOI válido.")
+        st.error("Por favor, introduce un DOI para comenzar.")
