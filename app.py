@@ -1,63 +1,83 @@
 import streamlit as st
 import requests
+import re
 from bs4 import BeautifulSoup
 
-# --- FUNCIONES DE LÓGICA ---
+# --- FUNCIONES DE LÓGICA DE PROGRAMACIÓN ---
 
-def obtener_url_desde_doi(doi):
-    """Resuelve el DOI usando la API de Crossref."""
-    url_api = f"https://api.crossref.org/works/{doi}"
+def buscar_url_repositorio(doi):
+    """
+    Usa la API de Unpaywall para saltar de la editorial al repositorio institucional.
+    """
+    # Unpaywall requiere un email para su base de datos gratuita
+    email = "jpriego@uco.es"
+    api_url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
+    
     try:
-        respuesta = requests.get(url_api)
-        respuesta.raise_for_status()
-        datos = respuesta.json()
-        return datos['message'].get('URL')
-    except:
+        respuesta = requests.get(api_url, timeout=10)
+        if respuesta.status_status == 200:
+            datos = respuesta.json()
+            # Filtramos las ubicaciones para encontrar solo las de tipo 'repository'
+            for loc in datos.get('oa_locations', []):
+                if loc.get('host_type') == 'repository':
+                    return loc.get('url_for_landing_page')
+        return None
+    except Exception as e:
+        st.error(f"Error de conexión con la API: {e}")
         return None
 
-def extraer_visualizaciones_dspace(url_repo):
-    """Extrae las visualizaciones de una página de DSpace."""
+def extraer_handle(url_repo):
+    """
+    Analiza la página del repositorio para localizar el identificador Handle.
+    """
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'} # Simulamos un navegador
-        respuesta = requests.get(url_repo, headers=headers)
-        respuesta.raise_for_status()
+        res = requests.get(url_repo, headers=headers, timeout=10)
+        # 1. Intentar encontrar el Handle en la URL final (redireccionada)
+        match = re.search(r'handle/(\d+/\d+)', res.url)
+        if match:
+            return match.group(1)
         
-        sopa = BeautifulSoup(respuesta.text, 'html.parser')
-        
-        # Estrategia de búsqueda: buscamos etiquetas que suelan contener estadísticas
-        # DSpace suele usar clases como 'ds-table' o texto como 'Statistics' / 'Visualizaciones'
-        elemento = sopa.find(string=lambda t: t and ('Visualizaciones' in t or 'Views' in t or 'Visitas' in t))
-        
-        if elemento:
-            # Intentamos obtener el número que acompaña al texto
-            return elemento.parent.get_text(strip=True)
-        return "No disponible"
-    except:
-        return "Error al acceder al repositorio"
-
-# --- INTERFAZ DE USUARIO (STREAMLIT) ---
-
-st.title("📊 Extractor de Métricas DSpace")
-st.write("Introduce un DOI para conocer el impacto del artículo en su repositorio institucional.")
-
-# Caja de búsqueda
-doi_usuario = st.text_input("Introduce el DOI (ejemplo: 10.1371/journal.pone.0115069)", "")
-
-if st.button("Buscar estadísticas"):
-    if doi_usuario:
-        with st.spinner("Buscando información..."):
-            # 1. Obtener URL
-            url_articulo = obtener_url_desde_doi(doi_usuario)
+        # 2. Intentar buscar en los metadatos HTML (Dublin Core)
+        sopa = BeautifulSoup(res.text, 'html.parser')
+        meta_tag = sopa.find('meta', attrs={'name': 'DC.identifier'})
+        if meta_tag and 'handle.net/' in meta_tag['content']:
+            return meta_tag['content'].split('handle.net/')[-1]
             
-            if url_articulo:
-                # 2. Obtener Visualizaciones
-                conteo = extraer_visualizaciones_dspace(url_articulo)
+        return "Handle no detectado visualmente."
+    except Exception as e:
+        return f"Error al analizar el repositorio: {e}"
+
+# --- INTERFAZ DE USUARIO CON STREAMLIT ---
+
+st.set_page_config(page_title="DOI to DSpace Handle", page_icon="🔗")
+
+st.title("🔍 Localizador de Handle desde DOI")
+st.markdown("""
+Esta app resuelve el problema de los DOI que apuntan a revistas comerciales, 
+buscando la versión depositada en el **repositorio DSpace** de la institución.
+""")
+
+doi_input = st.text_input("Introduce el DOI del artículo:", placeholder="Ej: 10.1016/j.jbiotec.2020.10.001")
+
+if st.button("Encontrar en Repositorio"):
+    if doi_input:
+        with st.spinner("Consultando bases de datos de acceso abierto..."):
+            url_inst = buscar_url_repositorio(doi_input.strip())
+            
+            if url_inst:
+                handle_detectado = extraer_handle(url_inst)
                 
-                # 3. Mostrar Resultado
-                st.success(f"¡Articulo encontrado!")
-                st.info(f"En el repositorio ha tenido **{conteo}** visualizaciones.")
-                st.write(f"🔗 [Enlace al artículo]({url_articulo})")
+                st.success("¡Versión en repositorio encontrada!")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Handle Identificado", handle_detectado)
+                with col2:
+                    st.write(f"**Repositorio:** [Ir al sitio]({url_inst})")
+                
+                st.info(f"Ahora puedes usar el Handle **{handle_detectado}** para consultar las estadísticas en DSpace.")
             else:
-                st.error("No se pudo encontrar una URL válida para ese DOI.")
+                st.warning("No se encontró una versión de este artículo en repositorios institucionales públicos.")
     else:
-        st.warning("Por favor, introduce un DOI.")
+        st.error("Por favor, introduce un DOI válido.")
