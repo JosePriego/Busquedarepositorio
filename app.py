@@ -7,16 +7,63 @@ import re
 # 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
 # ==========================================
 REPOSITORIOS_ANDALUCIA = {
-    "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "idUS (Sevilla)": {"url_base": "https://idus.us.es", "ruta_busqueda": "/xmlui/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "Digibug (Granada)": {"url_base": "https://digibug.ugr.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "RODIN (Cádiz)": {"url_base": "https://rodin.uca.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "riUAL (Almería)": {"url_base": "https://repositorio.ual.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "ruta_busqueda": "/xmlui/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'},
-    "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "ruta_busqueda": "/discover?query={doi}", "patron_handle": r'handle/(\d+/\d+)'}
+    # ==========================================
+# 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
+# ==========================================
+# Hemos añadido %22 (comillas en formato URL) alrededor del {doi} 
+# para forzar una búsqueda exacta y evitar falsos positivos.
+
+REPOSITORIOS_ANDALUCIA = {
+    "Helvia (Córdoba)": {
+        "url_base": "https://helvia.uco.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "idUS (Sevilla)": {
+        "url_base": "https://idus.us.es", 
+        "ruta_busqueda": "/xmlui/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "Digibug (Granada)": {
+        "url_base": "https://digibug.ugr.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "RODIN (Cádiz)": {
+        "url_base": "https://rodin.uca.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "riUAL (Almería)": {
+        "url_base": "https://repositorio.ual.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "Arias Montano (Huelva)": {
+        "url_base": "https://ariasmontano.uhu.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "Ruja (Jaén)": {
+        "url_base": "https://ruja.ujaen.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "Riuma (Málaga)": {
+        "url_base": "https://riuma.uma.es", 
+        "ruta_busqueda": "/xmlui/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "RIO (Olavide)": {
+        "url_base": "https://rio.upo.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    },
+    "UNIA (Andalucía)": {
+        "url_base": "https://dspace.unia.es", 
+        "ruta_busqueda": "/discover?query=%22{doi}%22", 
+        "patron_handle": r'handle/(\d+/\d+)'
+    }
 }
 
 # ==========================================
