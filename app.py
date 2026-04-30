@@ -7,13 +7,6 @@ import re
 # 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
 # ==========================================
 REPOSITORIOS_ANDALUCIA = {
-    # ==========================================
-# 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
-# ==========================================
-# Hemos añadido %22 (comillas en formato URL) alrededor del {doi} 
-# para forzar una búsqueda exacta y evitar falsos positivos.
-
-REPOSITORIOS_ANDALUCIA = {
     "Helvia (Córdoba)": {
         "url_base": "https://helvia.uco.es", 
         "ruta_busqueda": "/discover?query=%22{doi}%22", 
@@ -64,7 +57,7 @@ REPOSITORIOS_ANDALUCIA = {
         "ruta_busqueda": "/discover?query=%22{doi}%22", 
         "patron_handle": r'handle/(\d+/\d+)'
     }
-}
+} # <--- ¡Esta es la llave que faltaba en tu código!
 
 # ==========================================
 # 2. LÓGICA DE PROGRAMACIÓN (BACKEND)
@@ -72,14 +65,14 @@ REPOSITORIOS_ANDALUCIA = {
 
 def buscar_doi_en_andalucia(doi):
     """
-    Recorre el diccionario buscando el DOI en todos los repositorios.
-    Devuelve una lista con los repositorios donde se encontró.
+    Recorre el diccionario buscando el DOI de forma estricta en todos los repositorios.
     """
     resultados_encontrados = []
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
     for nombre_repo, config in REPOSITORIOS_ANDALUCIA.items():
         url_base = config["url_base"]
+        # Inyectamos el DOI en la ruta de búsqueda configurada
         ruta_especifica = config["ruta_busqueda"].format(doi=doi)
         url_busqueda = f"{url_base}{ruta_especifica}"
         
@@ -96,27 +89,24 @@ def buscar_doi_en_andalucia(doi):
                     match = re.search(patron_regex, enlace['href'])
                     if match:
                         handle = match.group(1)
-                        # Guardamos los datos necesarios para la fase de estadísticas
                         resultados_encontrados.append({
                             "nombre_repo": nombre_repo,
                             "url_base": url_base,
                             "handle": handle
                         })
-                        break # Solo necesitamos el primer handle válido de este repo
+                        break 
                         
         except Exception:
-            # Si un repositorio falla (caída del servidor, timeout), pasamos al siguiente silenciosamente
             continue 
 
     return resultados_encontrados
 
 def extraer_estadisticas_universales(url_base, handle):
     """
-    Visita la página de estadísticas de un repositorio concreto 
-    y extrae el número buscando la clase 'datacell'.
+    Visita la página de estadísticas de un repositorio y extrae el número.
     """
     url_estadisticas = f"{url_base}/handle/{handle}/statistics"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     
     try:
         res = requests.get(url_estadisticas, headers=headers, timeout=10)
@@ -146,26 +136,22 @@ doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cel
 
 if st.button("Rastrear en Andalucía"):
     if doi_input:
-        with st.spinner("Buscando en 10 repositorios institucionales... Esto puede tardar unos segundos."):
-            # Fase 1: Buscar en toda la red
+        with st.spinner("Buscando de forma estricta en 10 repositorios... Esto puede tardar unos segundos."):
             hallazgos = buscar_doi_en_andalucia(doi_input)
             
             if not hallazgos:
-                st.warning("No se ha encontrado este artículo en ninguno de los repositorios indexados con la configuración actual.")
+                st.warning("No se ha encontrado este artículo exacto en ninguno de los repositorios indexados.")
             else:
                 st.success(f"¡Búsqueda finalizada! Artículo encontrado en {len(hallazgos)} repositorio(s).")
                 
-                # Fase 2: Mostrar resultados y extraer estadísticas para cada hallazgo
                 for item in hallazgos:
                     nombre = item["nombre_repo"]
                     url_base = item["url_base"]
                     handle = item["handle"]
                     
-                    # Usamos una caja expansible de Streamlit para que quede visualmente limpio
                     with st.expander(f"📌 Resultados en: {nombre}", expanded=True):
                         st.write(f"**Handle:** `{handle}`")
                         
-                        # Extraemos las estadísticas específicas para esta universidad
                         datos_visitas, url_stats = extraer_estadisticas_universales(url_base, handle)
                         
                         if "Error" in datos_visitas or "no encontrado" in datos_visitas:
