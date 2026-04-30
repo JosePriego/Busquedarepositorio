@@ -40,7 +40,7 @@ def buscar_doi_en_helvia(doi):
 def extraer_estadisticas_helvia(handle):
     """
     Fase 2 y 3: Visita la página de estadísticas del Handle 
-    y extrae el número de la tabla principal.
+    y extrae el número iterando por las filas de la tabla principal.
     """
     url_estadisticas = f"https://helvia.uco.es/handle/{handle}/statistics"
     headers = {
@@ -52,27 +52,31 @@ def extraer_estadisticas_helvia(handle):
         res.raise_for_status()
         sopa = BeautifulSoup(res.text, 'html.parser')
         
-        # Localizamos la tabla exacta por su clase HTML
+        # 1. Localizamos la tabla exacta por su clase HTML
         tabla_total = sopa.find('table', class_='detailtable')
         
         if tabla_total:
             cuerpo_tabla = tabla_total.find('tbody')
             if cuerpo_tabla:
-                primera_fila = cuerpo_tabla.find('tr')
-                if primera_fila:
-                    celdas = primera_fila.find_all('td')
+                # 2. En lugar de buscar solo la primera fila, buscamos TODAS las filas
+                filas = cuerpo_tabla.find_all('tr')
+                
+                # 3. Iniciamos un bucle para revisar fila por fila
+                for fila in filas:
+                    celdas = fila.find_all('td')
                     
+                    # 4. Comprobamos si esta fila tiene al menos 2 celdas de datos (Título y Número)
                     if len(celdas) >= 2:
-                        # Extraemos el texto de la última celda limpia de espacios
+                        # Extraemos el texto de la última celda, lo limpiamos de espacios y lo devolvemos
                         numero_visualizaciones = celdas[-1].get_text(strip=True)
                         return numero_visualizaciones, url_estadisticas
                         
         return "Dato no encontrado en la tabla", url_estadisticas
         
     except requests.exceptions.RequestException as e:
-        return f"Error de conexión", url_estadisticas
+        return "Error de conexión", url_estadisticas
     except Exception as e:
-        return f"Error de lectura", url_estadisticas
+        return "Error de lectura", url_estadisticas
 
 # ==========================================
 # INTERFAZ DE USUARIO (FRONTEND EN STREAMLIT)
