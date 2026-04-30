@@ -2,11 +2,6 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 import re
-import urllib3
-
-# Desactivamos las advertencias de seguridad SSL en la consola 
-# ya que estamos permitiendo conexiones a universidades con certificados peculiares
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
 # 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
@@ -28,15 +23,13 @@ REPOSITORIOS_ANDALUCIA = {
 # 2. LÓGICA DE PROGRAMACIÓN (BACKEND)
 # ==========================================
 
-# Cabeceras mejoradas para parecer un humano navegando
-CABECERAS_NAVEGADOR = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8'
-}
-
 def buscar_doi_en_andalucia(doi):
-    registro_completo = []
+    """
+    Recorre el diccionario buscando el DOI. 
+    Devuelve un registro completo con el estado de cada uno de los 10 repositorios.
+    """
+    registro_completo = [] # Ahora guardaremos TODOS los resultados, buenos y malos
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
 
     for nombre_repo, config in REPOSITORIOS_ANDALUCIA.items():
         url_base = config["url_base"]
@@ -44,8 +37,7 @@ def buscar_doi_en_andalucia(doi):
         url_busqueda = f"{url_base}{ruta_especifica}"
         
         try:
-            # MEJORA: Aumentamos el timeout a 20s y añadimos verify=False para ignorar errores SSL
-            res = requests.get(url_busqueda, headers=CABECERAS_NAVEGADOR, timeout=20, verify=False)
+            res = requests.get(url_busqueda, headers=headers, timeout=10)
             res.raise_for_status()
             sopa = BeautifulSoup(res.text, 'html.parser')
             
@@ -61,27 +53,29 @@ def buscar_doi_en_andalucia(doi):
                         break
                 
                 if handle_encontrado:
+                    # ÉXITO: Guardamos el estado positivo y los datos que necesitamos para las estadísticas
                     registro_completo.append({
                         "nombre_repo": nombre_repo,
                         "estado": "✅ Encontrado",
                         "datos_utiles": {"url_base": url_base, "handle": handle_encontrado}
                     })
                 else:
+                    # CASO RARO: Hay enlaces pero no coinciden con el patrón
                     registro_completo.append({
                         "nombre_repo": nombre_repo,
                         "estado": "❌ No encontrado",
                         "datos_utiles": None
                     })
             else:
+                # FRACASO NORMAL: El artículo simplemente no está en este repositorio
                 registro_completo.append({
                     "nombre_repo": nombre_repo,
                     "estado": "❌ No encontrado",
                     "datos_utiles": None
                 })
                         
-        except Exception as e:
-            # Si quieres ver el error real en tu consola de Streamlit para depurar, puedes imprimir 'e'
-            # print(f"Error en {nombre_repo}: {e}")
+        except Exception:
+            # ERROR TÉCNICO: La página web estaba caída o tardó demasiado en responder
             registro_completo.append({
                 "nombre_repo": nombre_repo,
                 "estado": "⚠️ Error de conexión",
@@ -91,11 +85,12 @@ def buscar_doi_en_andalucia(doi):
     return registro_completo
 
 def extraer_estadisticas_universales(url_base, handle):
+    """Visita la página de estadísticas de un repositorio y extrae el número."""
     url_estadisticas = f"{url_base}/handle/{handle}/statistics"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'}
     
     try:
-        # MEJORA: Aplicamos el timeout y el verify=False también aquí
-        res = requests.get(url_estadisticas, headers=CABECERAS_NAVEGADOR, timeout=20, verify=False)
+        res = requests.get(url_estadisticas, headers=headers, timeout=10)
         res.raise_for_status()
         sopa = BeautifulSoup(res.text, 'html.parser')
         
@@ -120,21 +115,26 @@ doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cel
 
 if st.button("Rastrear en Andalucía"):
     if doi_input:
-        # Al aumentar el timeout, avisamos al usuario de que puede tardar más
-        with st.spinner("Conectando con 10 servidores universitarios... Esto puede tomar hasta 20-30 segundos."):
+        with st.spinner("Buscando de forma estricta en 10 repositorios... Esto puede tardar unos segundos."):
+            # Fase 1: Obtenemos el registro completo
             registro_busqueda = buscar_doi_en_andalucia(doi_input)
             
+            # --- NUEVA SECCIÓN VISUAL ---
             st.subheader("📡 Informe de Búsqueda")
             
+            # Creamos columnas para que la lista quede más bonita visualmente
             col1, col2 = st.columns(2)
             for i, item in enumerate(registro_busqueda):
+                # Dividimos la lista en dos columnas: los primeros 5 a la izquierda, los otros a la derecha
                 if i < 5:
                     col1.write(f"**{item['nombre_repo']}**: {item['estado']}")
                 else:
                     col2.write(f"**{item['nombre_repo']}**: {item['estado']}")
             
-            st.divider()
+            st.divider() # Añade una línea separadora
+            # ----------------------------
 
+            # Fase 2: Filtramos solo los repositorios donde el estado es "Encontrado"
             hallazgos = [item for item in registro_busqueda if item["datos_utiles"] is not None]
             
             if not hallazgos:
@@ -142,6 +142,7 @@ if st.button("Rastrear en Andalucía"):
             else:
                 st.success(f"¡Extracción lista! Artículo encontrado en {len(hallazgos)} repositorio(s).")
                 
+                # Desplegamos las estadísticas solo de los que tuvieron éxito
                 for item in hallazgos:
                     nombre = item["nombre_repo"]
                     url_base = item["datos_utiles"]["url_base"]
