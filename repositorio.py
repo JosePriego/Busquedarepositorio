@@ -117,8 +117,50 @@ def extraer_uca(doi):
 
 
 def extraer_upo(doi):
-    """Módulo especialista para RIO (Universidad Pablo de Olavide)"""
-    return {"estado": "⏳ Pendiente de programar", "visitas": None, "enlace": None}
+    """
+    Módulo especialista para RIO (Universidad Pablo de Olavide)
+    Estrategia: Consulta directa a la API de DSpace 7 (JSON)
+    """
+    url_base = "https://rio.upo.es"
+    sesion = crear_sesion_robusta()
+    
+    try:
+        # 1. Buscamos el UUID del artículo a través de la API de búsqueda
+        # Usamos la ruta de la API que alimenta el buscador que pasaste en la captura
+        url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi}&scope="
+        
+        res_busqueda = sesion.get(url_api_busqueda, headers=CABECERAS, timeout=30, verify=False)
+        res_busqueda.raise_for_status()
+        datos_busqueda = res_busqueda.json()
+        
+        # Navegamos por el JSON para encontrar el UUID
+        if "_embedded" in datos_busqueda and "searchObjects" in datos_busqueda["_embedded"]:
+            # Sacamos el primer resultado
+            primer_resultado = datos_busqueda["_embedded"]["searchObjects"][0]
+            uuid = primer_resultado["_embedded"]["indexableObject"]["uuid"]
+            
+            # 2. Ahora pedimos las estadísticas directamente a la API de eventos
+            # Esta es la 'puerta trasera' que nos da el número exacto (el '13' de tu captura)
+            url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid}&type=item"
+            
+            res_stats = sesion.get(url_api_stats, headers=CABECERAS, timeout=30, verify=False)
+            res_stats.raise_for_status()
+            datos_stats = res_stats.json()
+            
+            total_visitas = datos_stats.get("total", 0)
+            url_publica_stats = f"{url_base}/statistics/items/{uuid}"
+            
+            return {
+                "estado": "✅ Encontrado (API)",
+                "visitas": str(total_visitas),
+                "enlace": url_publica_stats
+            }
+        else:
+            return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
+            
+    except Exception as e:
+        # Si la API falla por lo que sea, intentamos al menos dar el enlace
+        return {"estado": f"⚠️ Error API: {type(e).__name__}", "visitas": None, "enlace": None}
 
 # ==========================================
 # 2. DIRECTORIO GENERAL
