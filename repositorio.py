@@ -22,7 +22,6 @@ CABECERAS = {
 
 def crear_sesion_robusta():
     sesion = requests.Session()
-    # Reintentos agresivos para evitar micro-cortes
     reintentos = Retry(total=3, backoff_factor=1, status_forcelist=[403, 500, 502, 503, 504])
     adaptador = HTTPAdapter(max_retries=reintentos)
     sesion.mount('http://', adaptador)
@@ -82,41 +81,46 @@ def extraer_uca(doi):
     except: return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
 
 def extraer_upo(doi):
-    """Módulo para RIO (Olavide) - DSpace 7 API REFORZADO"""
+    """Módulo para RIO (Olavide) - Blindado contra JSONDecodeError"""
     url_base = "https://rio.upo.es"
     sesion = crear_sesion_robusta()
-    
-    # Cabeceras específicas para la API de DSpace 7
     headers_api = CABECERAS.copy()
     headers_api['Accept'] = 'application/hal+json'
     
     try:
-        # 1. Búsqueda del UUID
-        url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi}&f.entityType=Publication,equals"
+        # Búsqueda inicial
+        url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi}"
         res_busqueda = sesion.get(url_api_busqueda, headers=headers_api, timeout=25, verify=False)
-        res_busqueda.raise_for_status()
+        
+        # VERIFICACIÓN: ¿Es realmente un JSON o nos han enviado HTML?
+        if "application/json" not in res_busqueda.headers.get("Content-Type", "").lower() and \
+           "application/hal+json" not in res_busqueda.headers.get("Content-Type", "").lower():
+            return {"estado": "⚠️ Servidor Olavide devolvió formato incorrecto", "visitas": None, "enlace": None}
+
         datos = res_busqueda.json()
         
         if "_embedded" in datos and "searchObjects" in datos["_embedded"] and len(datos["_embedded"]["searchObjects"]) > 0:
             objeto = datos["_embedded"]["searchObjects"][0]
             uuid = objeto["_embedded"]["indexableObject"]["uuid"]
             
-            # 2. Consulta de estadísticas totales
+            # Consulta de estadísticas
             url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid}&type=item"
             res_stats = sesion.get(url_api_stats, headers=headers_api, timeout=20, verify=False)
-            res_stats.raise_for_status()
-            total = res_stats.json().get("total", 0)
             
-            return {
-                "estado": "✅ Encontrado (API)", 
-                "visitas": str(total), 
-                "enlace": f"{url_base}/statistics/items/{uuid}"
-            }
+            # Verificación de JSON para las estadísticas
+            if "json" in res_stats.headers.get("Content-Type", "").lower():
+                total = res_stats.json().get("total", 0)
+                return {
+                    "estado": "✅ Encontrado (API)", 
+                    "visitas": str(total), 
+                    "enlace": f"{url_base}/statistics/items/{uuid}"
+                }
+            else:
+                return {"estado": "✅ Encontrado (Dato bloqueado por servidor)", "visitas": None, "enlace": f"{url_base}/statistics/items/{uuid}"}
         
         return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
     except Exception as e:
-        # Devolvemos el tipo de error para diagnóstico
-        return {"estado": f"⚠️ Error API: {type(e).__name__}", "visitas": None, "enlace": None}
+        return {"estado": f"⚠️ Error en comunicación: {type(e).__name__}", "visitas": None, "enlace": None}
 
 # ==========================================
 # 2. MOTOR DE BÚSQUEDA SIMULTÁNEA
@@ -140,13 +144,12 @@ if st.button("🚀 Iniciar Rastreo"):
         st.subheader("📡 Informe de Búsqueda")
         resultados_finales = {}
         
-        with st.spinner("Lanzando drones de búsqueda a las universidades..."):
+        with st.spinner("Lanzando drones de búsqueda..."):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ejecutor:
                 futuros = {ejecutor.submit(func, doi_input): nombre for nombre, func in REPOSITORIOS.items()}
                 for futuro in concurrent.futures.as_completed(futuros):
                     resultados_finales[futuros[futuro]] = futuro.result()
         
-        # Mostrar resultados en orden
         for nombre in REPOSITORIOS.keys():
             res = resultados_finales.get(nombre)
             with st.expander(f"📌 {nombre} - {res['estado']}", expanded=True):
