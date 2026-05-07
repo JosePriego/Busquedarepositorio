@@ -5,20 +5,26 @@ from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import re
 import urllib3
+import time
 
 # Silenciamos las advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
-# CONSTANTES Y HERRAMIENTAS GLOBALES
+# CONSTANTES Y DISFRAZ AVANZADO
 # ==========================================
-CABECERAS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
+# Hemos añadido más datos para parecer un humano navegando desde España
+CABECERAS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1'
+}
 
 def crear_sesion_robusta():
-    """Crea una conexión que espera pacientemente y reintenta si hay fallos."""
     sesion = requests.Session()
-    # Reintenta hasta 3 veces esperando 1 segundo entre intentos
-    reintentos = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    reintentos = Retry(total=3, backoff_factor=2, status_forcelist=[403, 500, 502, 503, 504])
     adaptador = HTTPAdapter(max_retries=reintentos)
     sesion.mount('http://', adaptador)
     sesion.mount('https://', adaptador)
@@ -31,11 +37,12 @@ def crear_sesion_robusta():
 def extraer_uco(doi):
     """Módulo especialista para Helvia (Universidad de Córdoba)"""
     url_base = "https://helvia.uco.es"
-    url_busqueda = f"{url_base}/discover?query=%22{doi}%22"
+    # Quitamos las comillas %22 para evitar bloqueos
+    url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
     
     try:
-        # ¡Aumentamos la paciencia a 30 segundos!
+        time.sleep(1) # Pequeña pausa humana antes de entrar
         res_busqueda = sesion.get(url_busqueda, headers=CABECERAS, timeout=30, verify=False)
         res_busqueda.raise_for_status()
         sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
@@ -51,7 +58,7 @@ def extraer_uco(doi):
         handle_encontrado = match.group(1)
         url_stats = f"{url_base}/{handle_encontrado}/statistics"
         
-        # Paciencia de 30 segundos también para las estadísticas
+        time.sleep(1) # Otra pequeña pausa humana
         res_stats = sesion.get(url_stats, headers=CABECERAS, timeout=30, verify=False)
         res_stats.raise_for_status()
         sopa_stats = BeautifulSoup(res_stats.text, 'html.parser')
@@ -63,8 +70,10 @@ def extraer_uco(doi):
         else:
             return {"estado": "⚠️ Dato no visible", "visitas": None, "enlace": url_stats}
             
+    except requests.exceptions.ConnectionError:
+         return {"estado": "⚠️ Error: Conexión rechazada (Posible bloqueo por IP)", "visitas": None, "enlace": None}
     except requests.exceptions.Timeout:
-        return {"estado": "⚠️ Tiempo agotado (Servidor muy lento)", "visitas": None, "enlace": None}
+        return {"estado": "⚠️ Tiempo agotado", "visitas": None, "enlace": None}
     except Exception as e:
         return {"estado": f"⚠️ Error: {type(e).__name__}", "visitas": None, "enlace": None}
 
@@ -72,7 +81,8 @@ def extraer_uco(doi):
 def extraer_uca(doi):
     """Módulo especialista para RODIN (Universidad de Cádiz)"""
     url_base = "https://rodin.uca.es"
-    url_busqueda = f"{url_base}/discover?query=%22{doi}%22"
+    # Quitamos las comillas %22 para que la BD de Cádiz no colapse
+    url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
     
     try:
@@ -103,7 +113,7 @@ def extraer_uca(doi):
             return {"estado": "⚠️ Dato no visible", "visitas": None, "enlace": url_stats}
             
     except requests.exceptions.Timeout:
-        return {"estado": "⚠️ Tiempo agotado (Servidor muy lento)", "visitas": None, "enlace": None}
+        return {"estado": "⚠️ Tiempo agotado", "visitas": None, "enlace": None}
     except Exception as e:
         return {"estado": f"⚠️ Error: {type(e).__name__}", "visitas": None, "enlace": None}
 
@@ -136,8 +146,7 @@ if st.button("🚀 Iniciar Rastreo"):
         st.subheader("📡 Informe de Búsqueda")
         
         for nombre_repo, funcion_especialista in REPOSITORIOS.items():
-            # Añadimos un aviso para que sepas que ahora espera más
-            with st.spinner(f"Consultando a {nombre_repo} (Puede tardar hasta 30s)..."):
+            with st.spinner(f"Consultando a {nombre_repo}..."):
                 resultado = funcion_especialista(doi_input)
                 
                 with st.expander(f"📌 {nombre_repo} - {resultado['estado']}", expanded=True):
