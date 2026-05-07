@@ -77,49 +77,48 @@ def extraer_uca(doi):
 
 
 def extraer_upo(doi):
-    """Módulo para RIO (Olavide) - ESTRATEGIA GOOGLEBOT"""
+    """Módulo para RIO (Olavide) - Estrategia de Enlace de Rescate"""
     url_base = "https://rio.upo.es"
-    
-    # Volvemos a la sesión normal, pero con el "Carnet de Identidad" de Google
     sesion = crear_sesion_robusta()
     
-    headers_googlebot = {
-        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+    # Usamos cabeceras estándar de navegador, sin disfraces de Google que puedan fallar
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json, application/hal+json'
     }
     
+    # Buscamos solo la parte final del DOI para no activar el firewall
     doi_busqueda = doi.split('/')[-1] if '/' in doi else doi
         
     try:
         url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi_busqueda}"
-        res_busqueda = sesion.get(url_api_busqueda, headers=headers_googlebot, timeout=25, verify=False)
+        res_busqueda = sesion.get(url_api_busqueda, headers=headers, timeout=20, verify=False)
         
-        if "json" not in res_busqueda.headers.get("Content-Type", "").lower():
-            return {"estado": "⚠️ Bloqueo de IP estricto (Requiere ejecución local)", "visitas": None, "enlace": None}
-             
-        datos = res_busqueda.json()
-        
-        if "_embedded" in datos and "searchObjects" in datos["_embedded"] and len(datos["_embedded"]["searchObjects"]) > 0:
-            uuid_correcto = None
-            for objeto in datos["_embedded"]["searchObjects"]:
-                item = objeto["_embedded"]["indexableObject"]
-                if doi.lower() in str(item).lower():
-                    uuid_correcto = item["uuid"]
-                    break
-            
-            if uuid_correcto:
-                url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid_correcto}&type=item"
-                res_stats = sesion.get(url_api_stats, headers=headers_googlebot, timeout=20, verify=False)
+        # Si hay respuesta exitosa (JSON)
+        if res_busqueda.status_code == 200 and "json" in res_busqueda.headers.get("Content-Type", "").lower():
+            datos = res_busqueda.json()
+            if "_embedded" in datos and "searchObjects" in datos["_embedded"] and len(datos["_embedded"]["searchObjects"]) > 0:
+                # Localizamos el UUID
+                objeto = datos["_embedded"]["searchObjects"][0]
+                uuid = objeto["_embedded"]["indexableObject"]["uuid"]
                 
-                if "json" in res_stats.headers.get("Content-Type", "").lower():
+                # Intentamos la última llamada para el número
+                url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid}&type=item"
+                res_stats = sesion.get(url_api_stats, headers=headers, timeout=15, verify=False)
+                
+                if res_stats.status_code == 200:
                     total = res_stats.json().get("total", 0)
-                    return {"estado": "✅ Encontrado (Vía Googlebot)", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid_correcto}"}
+                    return {"estado": "✅ Encontrado", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid}"}
                 else:
-                    return {"estado": "✅ Encontrado", "visitas": None, "enlace": f"{url_base}/statistics/items/{uuid_correcto}"}
-            
-        return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
-    except Exception as e:
-        return {"estado": f"⚠️ Error: {type(e).__name__}", "visitas": None, "enlace": None}
+                    # SI EL FIREWALL BLOQUEA EL NÚMERO, DAMOS EL ENLACE
+                    return {"estado": "✅ Localizado (Carga manual)", "visitas": "Hacer clic abajo", "enlace": f"{url_base}/statistics/items/{uuid}"}
+        
+        # Si hay bloqueo total, generamos una URL de búsqueda manual para el usuario
+        url_manual = f"{url_base}/search?query={doi}"
+        return {"estado": "⚠️ Protegido por Firewall", "visitas": None, "enlace": url_manual}
+        
+    except Exception:
+        return {"estado": "❌ No se pudo conectar", "visitas": None, "enlace": f"{url_base}/search?query={doi}"}
 
 # ==========================================
 # 2. MOTOR DE BÚSQUEDA SIMULTÁNEA
