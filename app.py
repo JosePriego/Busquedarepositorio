@@ -10,209 +10,131 @@ import concurrent.futures
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
-# 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
+# 1. DIRECTORIO DE REPOSITORIOS
 # ==========================================
 REPOSITORIOS_ANDALUCIA = {
-    "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "idUS (Sevilla)": {"url_base": "https://idus.us.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "Digibug (Granada)": {"url_base": "https://digibug.ugr.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "RODIN (Cádiz)": {"url_base": "https://rodin.uca.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "riUAL (Almería)": {"url_base": "https://repositorio.ual.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": True}, 
-    "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False}
+    "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "es_dspace7": False},
+    "idUS (Sevilla)": {"url_base": "https://idus.us.es", "es_dspace7": False},
+    "Digibug (Granada)": {"url_base": "https://digibug.ugr.es", "es_dspace7": False},
+    "RODIN (Cádiz)": {"url_base": "https://rodin.uca.es", "es_dspace7": False},
+    "riUAL (Almería)": {"url_base": "https://repositorio.ual.es", "es_dspace7": False},
+    "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "es_dspace7": False},
+    "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "es_dspace7": False},
+    "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "es_dspace7": False},
+    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "es_dspace7": True}, 
+    "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "es_dspace7": False}
 }
 
-CABECERAS_CLASICAS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-}
+CABECERAS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
 
-def crear_sesion_robusta():
-    sesion = requests.Session()
-    reintentos = Retry(connect=3, backoff_factor=0.5)
-    adaptador = HTTPAdapter(max_retries=reintentos)
-    sesion.mount('http://', adaptador)
-    sesion.mount('https://', adaptador)
-    return sesion
+def crear_sesion():
+    s = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[502, 503, 504])
+    s.mount('https://', HTTPAdapter(max_retries=retries))
+    return s
 
 # ==========================================
-# 2. LÓGICA DE PROGRAMACIÓN (BACKEND MULTIHILO)
+# 2. LÓGICA DE EXTRACCIÓN
 # ==========================================
 
-def procesar_un_repositorio(nombre_repo, config, doi):
+def procesar_repositorio(nombre, config, doi):
     url_base = config["url_base"]
-    patron_regex = config["patron_handle"]
-    es_dspace7 = config.get("es_dspace7", False)
+    sesion = crear_sesion()
     
-    estado_final = "❌ No encontrado"
-    datos_utiles = None
-    sesion = crear_sesion_robusta()
-
-    if es_dspace7:
-        # En DSpace 7 a veces es mejor codificar la barra del DOI
-        doi_limpio = doi.replace("/", "%2F")
-        url_api = f"{url_base}/server/api/discover/search/objects?query={doi_limpio}"
+    # 1. BUSQUEDA EN DSPACE 7 (API JSON)
+    if config["es_dspace7"]:
+        # DSpace 7 prefiere el DOI sin comillas en la API
+        url_api = f"{url_base}/server/api/discover/search/objects?query={doi}&scope="
         try:
-            res = sesion.get(url_api, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
-            res.raise_for_status()
-            
-            # Buscamos el UUID mágico en el texto de la respuesta
-            match_uuid = re.search(r'"uuid"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"', res.text)
-            
-            if match_uuid and doi.lower() in res.text.lower():
-                uuid_encontrado = match_uuid.group(1)
-                datos_utiles = {"url_base": url_base, "identificador": uuid_encontrado, "es_dspace7": True}
-                estado_final = "✅ Encontrado"
+            res = sesion.get(url_api, headers=CABECERAS, timeout=25, verify=False)
+            data = res.json()
+            # Navegamos por el JSON para encontrar el UUID
+            if "_embedded" in data and "searchObjects" in data["_embedded"]:
+                obj = data["_embedded"]["searchObjects"][0]["_embedded"]["indexableObject"]
+                uuid = obj["uuid"]
+                return {"nombre": nombre, "estado": "✅ Encontrado", "id": uuid, "tipo": "dspace7", "url_base": url_base}
+        except: pass
+        return {"nombre": nombre, "estado": "❌ No encontrado", "id": None}
 
-        except Exception as e:
-            estado_final = f"⚠️ Error API: {type(e).__name__}"
-
-        return {"nombre_repo": nombre_repo, "estado": estado_final, "datos_utiles": datos_utiles}
-
-    # Para los repositorios clásicos (HTML)
-    RUTAS_COMUNES = [
-        "/discover?query={doi}",        
-        "/search?query={doi}",          
-        "/simple-search?query={doi}",   
-        "/xmlui/discover?query={doi}"   
-    ]
-
-    for ruta in RUTAS_COMUNES:
-        url_busqueda = f"{url_base}{ruta.format(doi=doi)}"
+    # 2. BUSQUEDA EN DSPACE CLÁSICO (HTML)
+    rutas = ["/discover?query={doi}", "/search?query={doi}", "/xmlui/discover?query={doi}"]
+    for r in rutas:
+        url = f"{url_base}{r.format(doi=doi)}"
         try:
-            res = sesion.get(url_busqueda, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
-            
-            if res.status_code == 404:
-                continue 
-                
-            res.raise_for_status()
-            sopa = BeautifulSoup(res.text, 'html.parser')
-            enlaces = sopa.find_all('a', href=re.compile(patron_regex))
-            
-            handle_verificado = False
-            if enlaces:
-                handles_unicos = []
-                for enlace in enlaces:
-                    match = re.search(patron_regex, enlace['href'])
-                    if match and match.group(1) not in handles_unicos:
-                        handles_unicos.append(match.group(1))
-                
-                for posible_handle in handles_unicos[:3]:
-                    url_item = f"{url_base}/handle/{posible_handle}"
-                    try:
-                        res_item = sesion.get(url_item, headers=CABECERAS_CLASICAS, timeout=20, verify=False)
-                        if doi.lower() in res_item.text.lower():
-                            datos_utiles = {"url_base": url_base, "identificador": posible_handle, "es_dspace7": False}
-                            estado_final = "✅ Encontrado"
-                            handle_verificado = True
-                            break 
-                    except:
-                        continue 
-            
-            if handle_verificado:
-                break 
-                
-        except requests.exceptions.HTTPError as e:
-            estado_final = f"⚠️ Error {e.response.status_code}"
-            break
-        except Exception as e:
-            estado_final = f"⚠️ Error: {type(e).__name__}"
-            break
-
-    return {"nombre_repo": nombre_repo, "estado": estado_final, "datos_utiles": datos_utiles}
-
-
-def buscar_doi_en_andalucia_paralelo(doi):
-    registro_completo = []
+            res = sesion.get(url, headers=CABECERAS, timeout=20, verify=False)
+            if res.status_code == 200:
+                sopa = BeautifulSoup(res.text, 'html.parser')
+                # Buscamos cualquier enlace que parezca un Handle
+                enlaces = sopa.find_all('a', href=re.compile(r'handle/\d+/\d+'))
+                if enlaces:
+                    handle = re.search(r'handle/(\d+/\d+)', enlaces[0]['href']).group(1)
+                    return {"nombre": nombre, "estado": "✅ Encontrado", "id": handle, "tipo": "clasico", "url_base": url_base}
+        except: continue
     
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ejecutor:
-        futuros = []
-        for nombre_repo, config in REPOSITORIOS_ANDALUCIA.items():
-            tarea = ejecutor.submit(procesar_un_repositorio, nombre_repo, config, doi)
-            futuros.append(tarea)
-            
-        for tarea_completada in concurrent.futures.as_completed(futuros):
-            resultado = tarea_completada.result()
-            registro_completo.append(resultado)
+    return {"nombre": nombre, "estado": "❌ No encontrado", "id": None}
 
-    registro_completo = sorted(registro_completo, key=lambda x: x['nombre_repo'])
-    return registro_completo
+def obtener_stats(info):
+    url_base = info["url_base"]
+    id_obj = info["id"]
+    sesion = crear_sesion()
 
-def extraer_estadisticas_universales(datos_utiles):
-    url_base = datos_utiles["url_base"]
-    identificador = datos_utiles["identificador"]
-    es_dspace7 = datos_utiles["es_dspace7"]
+    if info["tipo"] == "dspace7":
+        # ¡MAGIA! Llamamos a la API de estadísticas de DSpace 7 directamente
+        url_stats_api = f"{url_base}/server/api/statistics/viewevents/search/total?scope={id_obj}&type=item"
+        url_publica = f"{url_base}/statistics/items/{id_obj}"
+        try:
+            res = sesion.get(url_stats_api, headers=CABECERAS, timeout=15, verify=False)
+            total = res.json().get("total", "No disponible")
+            return f"{total} (Dato de API)", url_publica
+        except:
+            return "Ver en web (API protegida)", url_publica
 
-    # Si es DSpace 7, construimos la URL con el UUID
-    if es_dspace7:
-        url_estadisticas = f"{url_base}/statistics/items/{identificador}"
-        return "Carga dinámica (DSpace 7). Haz clic en el enlace oficial para ver el número.", url_estadisticas
-
-    # Si es DSpace clásico, construimos la URL con el Handle
-    url_estadisticas = f"{url_base}/handle/{identificador}/statistics"
-    sesion = crear_sesion_robusta()
+    # DSpace Clásico
+    url_stats = f"{url_base}/handle/{id_obj}/statistics"
     try:
-        res = sesion.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
-        res.raise_for_status()
+        res = sesion.get(url_stats, headers=CABECERAS, timeout=15, verify=False)
         sopa = BeautifulSoup(res.text, 'html.parser')
-        
-        celda_numero = sopa.find('td', class_='datacell')
-        if celda_numero:
-            return celda_numero.get_text(strip=True), url_estadisticas
-            
-        return "Dato no visible públicamente en HTML", url_estadisticas
-    except Exception:
-        return f"Error de lectura", url_estadisticas
+        # Buscamos en la tabla de datos
+        celda = sopa.find('td', class_='datacell') or sopa.find('td', string=re.compile(r'^\d+$'))
+        if celda:
+            return celda.get_text(strip=True), url_stats
+        return "Dato no visible", url_stats
+    except:
+        return "Error de lectura", url_stats
 
 # ==========================================
-# 3. INTERFAZ DE USUARIO (STREAMLIT)
+# 3. INTERFAZ
 # ==========================================
 
-st.set_page_config(page_title="Impacto Andalucía", page_icon="🌍", layout="centered")
-st.title("🌍 Buscador de Impacto: Red de Repositorios")
-st.write("Introduce un DOI para buscarlo simultáneamente y ver el estado de cada repositorio en tiempo real.")
+st.set_page_config(page_title="Impacto Andalucía", layout="wide")
+st.title("🌍 Monitor de Impacto Andalucía")
 
-doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cells9061353")
+doi_input = st.text_input("Introduce el DOI del artículo:", placeholder="10.3390/healthcare9091216").strip()
 
-if st.button("Rastrear en Andalucía"):
+if st.button("🚀 Iniciar Rastreo"):
     if doi_input:
-        with st.spinner("🚀 Explorando bases de datos (HTML y DSpace 7)..."):
-            registro_busqueda = buscar_doi_en_andalucia_paralelo(doi_input)
+        with st.spinner("Buscando en toda la red andaluza..."):
+            # Paralelismo para ir rápido
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                futuros = [executor.submit(procesar_repositorio, n, c, doi_input) for n, c in REPOSITORIOS_ANDALUCIA.items()]
+                resultados = [f.result() for f in concurrent.futures.as_completed(futuros)]
             
+            # Informe de búsqueda
             st.subheader("📡 Informe de Búsqueda")
+            resultados = sorted(resultados, key=lambda x: x['nombre'])
+            cols = st.columns(2)
+            for i, r in enumerate(resultados):
+                cols[i%2].write(f"**{r['nombre']}**: {r['estado']}")
             
-            col1, col2 = st.columns(2)
-            for i, item in enumerate(registro_busqueda):
-                if i < 5:
-                    col1.write(f"**{item['nombre_repo']}**: {item['estado']}")
-                else:
-                    col2.write(f"**{item['nombre_repo']}**: {item['estado']}")
-            
-            st.divider()
-
-            hallazgos = [item for item in registro_busqueda if item["datos_utiles"] is not None]
-            
-            if not hallazgos:
-                st.warning("No se ha encontrado este artículo exacto en ninguno de los repositorios.")
+            # Resultados detallados
+            hallazgos = [r for r in resultados if r["id"]]
+            if hallazgos:
+                st.divider()
+                st.success(f"Se han encontrado {len(hallazgos)} fuentes.")
+                for h in hallazgos:
+                    with st.expander(f"📊 Estadísticas en {h['nombre']}", expanded=True):
+                        valor, link = obtener_stats(h)
+                        st.metric("Visualizaciones Totales", valor)
+                        st.write(f"🔗 [Enlace oficial a la fuente]({link})")
             else:
-                st.success(f"¡Extracción lista! Artículo encontrado y verificado en {len(hallazgos)} repositorio(s).")
-                
-                for item in hallazgos:
-                    nombre = item["nombre_repo"]
-                    identificador = item["datos_utiles"]["identificador"]
-                    
-                    with st.expander(f"📌 Estadísticas en: {nombre}", expanded=True):
-                        st.write(f"**Identificador (Handle/UUID):** `{identificador}`")
-                        
-                        datos_visitas, url_stats = extraer_estadisticas_universales(item["datos_utiles"])
-                        
-                        if "Error" in datos_visitas or "no visible" in datos_visitas or "dinámica" in datos_visitas:
-                            st.warning(f"Estadísticas: {datos_visitas}")
-                        else:
-                            st.info(f"📊 **Visualizaciones totales:** {datos_visitas}")
-                            
-                        st.write(f"🔗 [Ver estadísticas oficiales]({url_stats})")
-    else:
-        st.error("Por favor, introduce un DOI para comenzar.")
+                st.error("No se ha encontrado el DOI en ningún repositorio. Verifica que el DOI sea correcto.")
