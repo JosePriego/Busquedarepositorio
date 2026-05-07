@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import re
 import urllib3
@@ -31,6 +33,17 @@ CABECERAS_CLASICAS = {
 # 2. LÓGICA DE PROGRAMACIÓN (BACKEND MULTIHILO)
 # ==========================================
 
+def crear_sesion_robusta():
+    """Crea una sesión web que reintenta automáticamente si hay un fallo de conexión."""
+    sesion = requests.Session()
+    # connect=3: reintenta 3 veces si no puede conectarse
+    # backoff_factor=0.5: espera 0.5s, luego 1s, luego 1.5s entre reintentos
+    reintentos = Retry(connect=3, backoff_factor=0.5)
+    adaptador = HTTPAdapter(max_retries=reintentos)
+    sesion.mount('http://', adaptador)
+    sesion.mount('https://', adaptador)
+    return sesion
+
 def procesar_un_repositorio(nombre_repo, config, doi):
     url_base = config["url_base"]
     patron_regex = config["patron_handle"]
@@ -38,14 +51,13 @@ def procesar_un_repositorio(nombre_repo, config, doi):
     
     estado_final = "❌ No encontrado"
     datos_utiles = None
+    sesion = crear_sesion_robusta() # Usamos nuestra nueva sesión blindada
 
     if es_dspace7:
         url_api = f"{url_base}/server/api/discover/search/objects?query=%22{doi}%22"
         try:
-            # AUMENTAMOS LA PACIENCIA A 30 SEGUNDOS
-            res = requests.get(url_api, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
+            res = sesion.get(url_api, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
             res.raise_for_status()
-            
             match = re.search(r'(\d{4,5}/\d+)', res.text)
             
             if match:
@@ -69,8 +81,7 @@ def procesar_un_repositorio(nombre_repo, config, doi):
     for ruta in RUTAS_COMUNES:
         url_busqueda = f"{url_base}{ruta.format(doi=doi)}"
         try:
-            # AUMENTAMOS LA PACIENCIA A 30 SEGUNDOS
-            res = requests.get(url_busqueda, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
+            res = sesion.get(url_busqueda, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
             
             if res.status_code == 404:
                 continue 
@@ -90,8 +101,7 @@ def procesar_un_repositorio(nombre_repo, config, doi):
                 for posible_handle in handles_unicos[:3]:
                     url_item = f"{url_base}/handle/{posible_handle}"
                     try:
-                        # AUMENTAMOS LA PACIENCIA A 20 SEGUNDOS PARA LA VERIFICACIÓN
-                        res_item = requests.get(url_item, headers=CABECERAS_CLASICAS, timeout=20, verify=False)
+                        res_item = sesion.get(url_item, headers=CABECERAS_CLASICAS, timeout=20, verify=False)
                         if doi.lower() in res_item.text.lower():
                             datos_utiles = {"url_base": url_base, "handle": posible_handle}
                             estado_final = "✅ Encontrado"
@@ -108,6 +118,9 @@ def procesar_un_repositorio(nombre_repo, config, doi):
             break
         except requests.exceptions.Timeout:
             estado_final = "⚠️ Tiempo agotado"
+            break
+        except requests.exceptions.ConnectionError:
+            estado_final = "⚠️ Error: Conexión rechazada"
             break
         except Exception as e:
             estado_final = f"⚠️ Error: {type(e).__name__}"
@@ -134,9 +147,9 @@ def buscar_doi_en_andalucia_paralelo(doi):
 
 def extraer_estadisticas_universales(url_base, handle):
     url_estadisticas = f"{url_base}/handle/{handle}/statistics"
+    sesion = crear_sesion_robusta()
     try:
-        # AUMENTAMOS LA PACIENCIA A 30 SEGUNDOS
-        res = requests.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
+        res = sesion.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
         res.raise_for_status()
         sopa = BeautifulSoup(res.text, 'html.parser')
         
@@ -146,7 +159,7 @@ def extraer_estadisticas_universales(url_base, handle):
             
         return "Dato no visible públicamente en HTML", url_estadisticas
     except Exception:
-        return f"Error de lectura (posible API requerida)", url_estadisticas
+        return f"Error de lectura (posible protección del servidor)", url_estadisticas
 
 # ==========================================
 # 3. INTERFAZ DE USUARIO (STREAMLIT)
@@ -160,7 +173,7 @@ doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cel
 
 if st.button("Rastrear en Andalucía"):
     if doi_input:
-        with st.spinner("🚀 Explorando bases de datos... (Puede tomar hasta 30 segundos si los servidores están lentos)"):
+        with st.spinner("🚀 Explorando bases de datos con sistema anti-bloqueos activado..."):
             registro_busqueda = buscar_doi_en_andalucia_paralelo(doi_input)
             
             st.subheader("📡 Informe de Búsqueda")
