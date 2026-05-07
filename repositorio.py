@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 import re
 import urllib3
 import time
+import concurrent.futures
 
 # Silenciamos las advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -13,7 +14,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 # CONSTANTES Y DISFRAZ AVANZADO
 # ==========================================
-# Hemos añadido más datos para parecer un humano navegando desde España
 CABECERAS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -37,12 +37,11 @@ def crear_sesion_robusta():
 def extraer_uco(doi):
     """Módulo especialista para Helvia (Universidad de Córdoba)"""
     url_base = "https://helvia.uco.es"
-    # Quitamos las comillas %22 para evitar bloqueos
     url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
     
     try:
-        time.sleep(1) # Pequeña pausa humana antes de entrar
+        time.sleep(1) 
         res_busqueda = sesion.get(url_busqueda, headers=CABECERAS, timeout=30, verify=False)
         res_busqueda.raise_for_status()
         sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
@@ -58,7 +57,7 @@ def extraer_uco(doi):
         handle_encontrado = match.group(1)
         url_stats = f"{url_base}/{handle_encontrado}/statistics"
         
-        time.sleep(1) # Otra pequeña pausa humana
+        time.sleep(1) 
         res_stats = sesion.get(url_stats, headers=CABECERAS, timeout=30, verify=False)
         res_stats.raise_for_status()
         sopa_stats = BeautifulSoup(res_stats.text, 'html.parser')
@@ -81,7 +80,6 @@ def extraer_uco(doi):
 def extraer_uca(doi):
     """Módulo especialista para RODIN (Universidad de Cádiz)"""
     url_base = "https://rodin.uca.es"
-    # Quitamos las comillas %22 para que la BD de Cádiz no colapse
     url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
     
@@ -137,24 +135,41 @@ REPOSITORIOS = {
 
 st.set_page_config(page_title="Impacto Andalucía", page_icon="🌍", layout="centered")
 st.title("🌍 Buscador de Impacto: Red de Repositorios")
-st.write("Arquitectura Modular Activa.")
+st.write("Arquitectura Modular de Alta Velocidad (Multihilo) Activa.")
 
 doi_input = st.text_input("Introduce el DOI del artículo:", placeholder="Ej: 10.3390/healthcare9091216").strip()
 
-if st.button("🚀 Iniciar Rastreo"):
+if st.button("🚀 Iniciar Rastreo Rápido"):
     if doi_input:
-        st.subheader("📡 Informe de Búsqueda")
+        st.subheader("📡 Informe de Búsqueda Simultánea")
         
-        for nombre_repo, funcion_especialista in REPOSITORIOS.items():
-            with st.spinner(f"Consultando a {nombre_repo}..."):
-                resultado = funcion_especialista(doi_input)
+        resultados_finales = {}
+        
+        with st.spinner("Lanzando búsqueda a todas las universidades al mismo tiempo... (Máx. 30s)"):
+            # Creamos el equipo de trabajadores en paralelo
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ejecutor:
+                # Asignamos a cada trabajador su módulo correspondiente
+                futuros = {ejecutor.submit(funcion, doi_input): nombre for nombre, funcion in REPOSITORIOS.items()}
                 
+                # A medida que los trabajadores van terminando, recogemos su resultado
+                for futuro in concurrent.futures.as_completed(futuros):
+                    nombre_repo = futuros[futuro]
+                    try:
+                        resultados_finales[nombre_repo] = futuro.result()
+                    except Exception as e:
+                        resultados_finales[nombre_repo] = {"estado": f"⚠️ Error interno: {e}", "visitas": None, "enlace": None}
+        
+        # Una vez que todos han terminado, pintamos las cajas en el orden original
+        for nombre_repo in REPOSITORIOS.keys():
+            resultado = resultados_finales.get(nombre_repo)
+            
+            if resultado:
                 with st.expander(f"📌 {nombre_repo} - {resultado['estado']}", expanded=True):
-                    if resultado['visitas']:
+                    if resultado.get('visitas'):
                         st.info(f"📊 **Visualizaciones totales:** {resultado['visitas']}")
-                    if resultado['enlace']:
+                    if resultado.get('enlace'):
                         st.write(f"🔗 [Ver estadísticas oficiales]({resultado['enlace']})")
-                    if not resultado['visitas'] and not resultado['enlace']:
+                    if not resultado.get('visitas') and not resultado.get('enlace'):
                          st.write("Módulo en construcción o dato no encontrado.")
     else:
         st.error("Por favor, introduce un DOI para comenzar.")
