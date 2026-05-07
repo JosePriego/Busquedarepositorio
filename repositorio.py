@@ -13,7 +13,64 @@ def extraer_upo(doi):
 def extraer_uco(doi):
     """Módulo especialista para Helvia (Universidad de Córdoba)"""
     # Aquí pondremos el código exacto cuando me pases la captura
-    return {"estado": "⏳ Pendiente de programar", "visitas": None, "enlace": None}
+    import requests
+from bs4 import BeautifulSoup
+import re
+import urllib3
+
+# Silenciamos las advertencias de certificados SSL
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Cabecera estándar para simular ser un navegador humano
+CABECERAS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'}
+
+def extraer_uco(doi):
+    """
+    Módulo especialista para Helvia (Universidad de Córdoba)
+    Flujo: Búsqueda exacta -> Extracción de Handle -> Lectura de celda 'datacell'
+    """
+    url_base = "https://helvia.uco.es"
+    # 1. Búsqueda exacta usando las comillas que vimos en tu captura (%22)
+    url_busqueda = f"{url_base}/discover?query=%22{doi}%22"
+    
+    try:
+        # Fase 1: Buscar el artículo
+        res_busqueda = requests.get(url_busqueda, headers=CABECERAS, timeout=15, verify=False)
+        res_busqueda.raise_for_status()
+        sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
+        
+        # Buscamos el Handle en los enlaces de la página de resultados
+        enlaces = sopa_busqueda.find_all('a', href=re.compile(r'handle/\d+/\d+'))
+        
+        if not enlaces:
+            return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
+            
+        # Extraemos el código exacto (ej: 10396/22616)
+        match = re.search(r'(handle/\d+/\d+)', enlaces[0]['href'])
+        if not match:
+            return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
+            
+        handle_encontrado = match.group(1)
+        
+        # Fase 2: Extraer estadísticas directas
+        url_stats = f"{url_base}/{handle_encontrado}/statistics"
+        res_stats = requests.get(url_stats, headers=CABECERAS, timeout=15, verify=False)
+        res_stats.raise_for_status()
+        sopa_stats = BeautifulSoup(res_stats.text, 'html.parser')
+        
+        # Buscamos directamente la celda con la clase de DSpace
+        celda_numero = sopa_stats.find('td', class_='datacell')
+        
+        if celda_numero:
+            visitas = celda_numero.get_text(strip=True)
+            return {"estado": "✅ Encontrado", "visitas": visitas, "enlace": url_stats}
+        else:
+            return {"estado": "⚠️ Dato no visible en tabla", "visitas": None, "enlace": url_stats}
+            
+    except requests.exceptions.Timeout:
+        return {"estado": "⚠️ Tiempo agotado", "visitas": None, "enlace": None}
+    except Exception as e:
+        return {"estado": f"⚠️ Error: {type(e).__name__}", "visitas": None, "enlace": None}
 
 # (Iremos añadiendo el resto de universidades aquí...)
 
