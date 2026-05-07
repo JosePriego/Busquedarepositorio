@@ -29,20 +29,17 @@ CABECERAS_CLASICAS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-# ==========================================
-# 2. LÓGICA DE PROGRAMACIÓN (BACKEND MULTIHILO)
-# ==========================================
-
 def crear_sesion_robusta():
-    """Crea una sesión web que reintenta automáticamente si hay un fallo de conexión."""
     sesion = requests.Session()
-    # connect=3: reintenta 3 veces si no puede conectarse
-    # backoff_factor=0.5: espera 0.5s, luego 1s, luego 1.5s entre reintentos
     reintentos = Retry(connect=3, backoff_factor=0.5)
     adaptador = HTTPAdapter(max_retries=reintentos)
     sesion.mount('http://', adaptador)
     sesion.mount('https://', adaptador)
     return sesion
+
+# ==========================================
+# 2. LÓGICA DE PROGRAMACIÓN (BACKEND MULTIHILO)
+# ==========================================
 
 def procesar_un_repositorio(nombre_repo, config, doi):
     url_base = config["url_base"]
@@ -51,26 +48,30 @@ def procesar_un_repositorio(nombre_repo, config, doi):
     
     estado_final = "❌ No encontrado"
     datos_utiles = None
-    sesion = crear_sesion_robusta() # Usamos nuestra nueva sesión blindada
+    sesion = crear_sesion_robusta()
 
     if es_dspace7:
-        url_api = f"{url_base}/server/api/discover/search/objects?query=%22{doi}%22"
+        # En DSpace 7 a veces es mejor codificar la barra del DOI
+        doi_limpio = doi.replace("/", "%2F")
+        url_api = f"{url_base}/server/api/discover/search/objects?query={doi_limpio}"
         try:
             res = sesion.get(url_api, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
             res.raise_for_status()
-            match = re.search(r'(\d{4,5}/\d+)', res.text)
             
-            if match:
-                posible_handle = match.group(1)
-                if doi.lower() in res.text.lower():
-                    datos_utiles = {"url_base": url_base, "handle": posible_handle}
-                    estado_final = "✅ Encontrado"
+            # Buscamos el UUID mágico en el texto de la respuesta
+            match_uuid = re.search(r'"uuid"\s*:\s*"([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})"', res.text)
+            
+            if match_uuid and doi.lower() in res.text.lower():
+                uuid_encontrado = match_uuid.group(1)
+                datos_utiles = {"url_base": url_base, "identificador": uuid_encontrado, "es_dspace7": True}
+                estado_final = "✅ Encontrado"
 
         except Exception as e:
             estado_final = f"⚠️ Error API: {type(e).__name__}"
 
         return {"nombre_repo": nombre_repo, "estado": estado_final, "datos_utiles": datos_utiles}
 
+    # Para los repositorios clásicos (HTML)
     RUTAS_COMUNES = [
         "/discover?query={doi}",        
         "/search?query={doi}",          
@@ -103,7 +104,7 @@ def procesar_un_repositorio(nombre_repo, config, doi):
                     try:
                         res_item = sesion.get(url_item, headers=CABECERAS_CLASICAS, timeout=20, verify=False)
                         if doi.lower() in res_item.text.lower():
-                            datos_utiles = {"url_base": url_base, "handle": posible_handle}
+                            datos_utiles = {"url_base": url_base, "identificador": posible_handle, "es_dspace7": False}
                             estado_final = "✅ Encontrado"
                             handle_verificado = True
                             break 
@@ -115,12 +116,6 @@ def procesar_un_repositorio(nombre_repo, config, doi):
                 
         except requests.exceptions.HTTPError as e:
             estado_final = f"⚠️ Error {e.response.status_code}"
-            break
-        except requests.exceptions.Timeout:
-            estado_final = "⚠️ Tiempo agotado"
-            break
-        except requests.exceptions.ConnectionError:
-            estado_final = "⚠️ Error: Conexión rechazada"
             break
         except Exception as e:
             estado_final = f"⚠️ Error: {type(e).__name__}"
@@ -145,8 +140,18 @@ def buscar_doi_en_andalucia_paralelo(doi):
     registro_completo = sorted(registro_completo, key=lambda x: x['nombre_repo'])
     return registro_completo
 
-def extraer_estadisticas_universales(url_base, handle):
-    url_estadisticas = f"{url_base}/handle/{handle}/statistics"
+def extraer_estadisticas_universales(datos_utiles):
+    url_base = datos_utiles["url_base"]
+    identificador = datos_utiles["identificador"]
+    es_dspace7 = datos_utiles["es_dspace7"]
+
+    # Si es DSpace 7, construimos la URL con el UUID
+    if es_dspace7:
+        url_estadisticas = f"{url_base}/statistics/items/{identificador}"
+        return "Carga dinámica (DSpace 7). Haz clic en el enlace oficial para ver el número.", url_estadisticas
+
+    # Si es DSpace clásico, construimos la URL con el Handle
+    url_estadisticas = f"{url_base}/handle/{identificador}/statistics"
     sesion = crear_sesion_robusta()
     try:
         res = sesion.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
@@ -159,7 +164,7 @@ def extraer_estadisticas_universales(url_base, handle):
             
         return "Dato no visible públicamente en HTML", url_estadisticas
     except Exception:
-        return f"Error de lectura (posible protección del servidor)", url_estadisticas
+        return f"Error de lectura", url_estadisticas
 
 # ==========================================
 # 3. INTERFAZ DE USUARIO (STREAMLIT)
@@ -173,7 +178,7 @@ doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cel
 
 if st.button("Rastrear en Andalucía"):
     if doi_input:
-        with st.spinner("🚀 Explorando bases de datos con sistema anti-bloqueos activado..."):
+        with st.spinner("🚀 Explorando bases de datos (HTML y DSpace 7)..."):
             registro_busqueda = buscar_doi_en_andalucia_paralelo(doi_input)
             
             st.subheader("📡 Informe de Búsqueda")
@@ -196,15 +201,14 @@ if st.button("Rastrear en Andalucía"):
                 
                 for item in hallazgos:
                     nombre = item["nombre_repo"]
-                    url_base = item["datos_utiles"]["url_base"]
-                    handle = item["datos_utiles"]["handle"]
+                    identificador = item["datos_utiles"]["identificador"]
                     
                     with st.expander(f"📌 Estadísticas en: {nombre}", expanded=True):
-                        st.write(f"**Handle Verificado:** `{handle}`")
+                        st.write(f"**Identificador (Handle/UUID):** `{identificador}`")
                         
-                        datos_visitas, url_stats = extraer_estadisticas_universales(url_base, handle)
+                        datos_visitas, url_stats = extraer_estadisticas_universales(item["datos_utiles"])
                         
-                        if "Error" in datos_visitas or "no encontrado" in datos_visitas:
+                        if "Error" in datos_visitas or "no visible" in datos_visitas or "dinámica" in datos_visitas:
                             st.warning(f"Estadísticas: {datos_visitas}")
                         else:
                             st.info(f"📊 **Visualizaciones totales:** {datos_visitas}")
