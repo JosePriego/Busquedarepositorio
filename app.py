@@ -10,7 +10,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 # 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
 # ==========================================
-# Añadimos un "interruptor" (es_dspace7) a nuestro diccionario.
 REPOSITORIOS_ANDALUCIA = {
     "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
     "idUS (Sevilla)": {"url_base": "https://idus.us.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
@@ -20,7 +19,7 @@ REPOSITORIOS_ANDALUCIA = {
     "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
     "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
     "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
-    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": True}, # ¡Activamos el modo DSpace 7!
+    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": True}, 
     "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False}
 }
 
@@ -40,22 +39,17 @@ def procesar_un_repositorio(nombre_repo, config, doi):
     estado_final = "❌ No encontrado"
     datos_utiles = None
 
-    # ESTRATEGIA A: Para repositorios modernos (UPO)
     if es_dspace7:
-        # Usamos la puerta trasera (API) y forzamos las comillas para precisión
         url_api = f"{url_base}/server/api/discover/search/objects?query=%22{doi}%22"
         try:
-            res = requests.get(url_api, headers=CABECERAS_CLASICAS, timeout=15, verify=False)
+            # AUMENTAMOS LA PACIENCIA A 30 SEGUNDOS
+            res = requests.get(url_api, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
             res.raise_for_status()
             
-            # La API devuelve un texto puro. Buscamos cualquier Handle que aparezca dentro.
             match = re.search(r'(\d{4,5}/\d+)', res.text)
             
             if match:
                 posible_handle = match.group(1)
-                # Verificamos si realmente el DOI está asociado a este artículo
-                url_item_api = f"{url_base}/server/api/core/items/{posible_handle}" # Endpoint genérico
-                # Para simplificar y asegurar, verificamos el DOI en el texto crudo de la respuesta inicial
                 if doi.lower() in res.text.lower():
                     datos_utiles = {"url_base": url_base, "handle": posible_handle}
                     estado_final = "✅ Encontrado"
@@ -65,8 +59,6 @@ def procesar_un_repositorio(nombre_repo, config, doi):
 
         return {"nombre_repo": nombre_repo, "estado": estado_final, "datos_utiles": datos_utiles}
 
-
-    # ESTRATEGIA B: Para repositorios clásicos (HTML) (UCO, US, UGR...)
     RUTAS_COMUNES = [
         "/discover?query={doi}",        
         "/search?query={doi}",          
@@ -77,7 +69,8 @@ def procesar_un_repositorio(nombre_repo, config, doi):
     for ruta in RUTAS_COMUNES:
         url_busqueda = f"{url_base}{ruta.format(doi=doi)}"
         try:
-            res = requests.get(url_busqueda, headers=CABECERAS_CLASICAS, timeout=15, verify=False)
+            # AUMENTAMOS LA PACIENCIA A 30 SEGUNDOS
+            res = requests.get(url_busqueda, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
             
             if res.status_code == 404:
                 continue 
@@ -97,7 +90,8 @@ def procesar_un_repositorio(nombre_repo, config, doi):
                 for posible_handle in handles_unicos[:3]:
                     url_item = f"{url_base}/handle/{posible_handle}"
                     try:
-                        res_item = requests.get(url_item, headers=CABECERAS_CLASICAS, timeout=10, verify=False)
+                        # AUMENTAMOS LA PACIENCIA A 20 SEGUNDOS PARA LA VERIFICACIÓN
+                        res_item = requests.get(url_item, headers=CABECERAS_CLASICAS, timeout=20, verify=False)
                         if doi.lower() in res_item.text.lower():
                             datos_utiles = {"url_base": url_base, "handle": posible_handle}
                             estado_final = "✅ Encontrado"
@@ -139,11 +133,10 @@ def buscar_doi_en_andalucia_paralelo(doi):
     return registro_completo
 
 def extraer_estadisticas_universales(url_base, handle):
-    # En DSpace 7, las estadísticas a veces se muestran igual en /statistics, 
-    # pero vamos a intentar la ruta estándar por si mantienen compatibilidad.
     url_estadisticas = f"{url_base}/handle/{handle}/statistics"
     try:
-        res = requests.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=15, verify=False)
+        # AUMENTAMOS LA PACIENCIA A 30 SEGUNDOS
+        res = requests.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=30, verify=False)
         res.raise_for_status()
         sopa = BeautifulSoup(res.text, 'html.parser')
         
@@ -167,7 +160,7 @@ doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cel
 
 if st.button("Rastrear en Andalucía"):
     if doi_input:
-        with st.spinner("🚀 Explorando bases de datos (HTML y API) en paralelo..."):
+        with st.spinner("🚀 Explorando bases de datos... (Puede tomar hasta 30 segundos si los servidores están lentos)"):
             registro_busqueda = buscar_doi_en_andalucia_paralelo(doi_input)
             
             st.subheader("📡 Informe de Búsqueda")
