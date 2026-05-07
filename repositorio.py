@@ -12,7 +12,7 @@ import concurrent.futures
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ==========================================
-# CONSTANTES Y DISFRAZ HUMANO
+# CONSTANTES Y CONFIGURACIÓN DE RED
 # ==========================================
 CABECERAS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -22,6 +22,7 @@ CABECERAS = {
 
 def crear_sesion_robusta():
     sesion = requests.Session()
+    # Reintentos agresivos para evitar micro-cortes
     reintentos = Retry(total=3, backoff_factor=1, status_forcelist=[403, 500, 502, 503, 504])
     adaptador = HTTPAdapter(max_retries=reintentos)
     sesion.mount('http://', adaptador)
@@ -33,101 +34,92 @@ def crear_sesion_robusta():
 # ==========================================
 
 def extraer_uco(doi):
-    """Módulo para Helvia (Córdoba) con VERIFICACIÓN DE DOI"""
+    """Módulo para Helvia (Córdoba) con VERIFICACIÓN"""
     url_base = "https://helvia.uco.es"
     url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
-    
     try:
         res_busqueda = sesion.get(url_busqueda, headers=CABECERAS, timeout=20, verify=False)
         sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
         enlaces = sopa_busqueda.find_all('a', href=re.compile(r'handle/\d+/\d+'))
         
-        if not enlaces:
-            return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
+        if not enlaces: return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
 
-        # --- FILTRO DE VERIFICACIÓN ---
-        # Revisamos los primeros resultados para ver cuál es el REAL
         for link in enlaces[:3]:
             handle_path = re.search(r'(handle/\d+/\d+)', link['href']).group(1)
             url_articulo = f"{url_base}/{handle_path}"
-            
             res_art = sesion.get(url_articulo, headers=CABECERAS, timeout=15, verify=False)
-            # Solo si el DOI aparece en el texto de la ficha técnica, es el correcto
             if doi.lower() in res_art.text.lower():
                 url_stats = f"{url_articulo}/statistics"
                 res_stats = sesion.get(url_stats, headers=CABECERAS, timeout=15, verify=False)
-                sopa_stats = BeautifulSoup(res_stats.text, 'html.parser')
-                celda = sopa_stats.find('td', class_='datacell')
-                
-                if celda:
-                    return {"estado": "✅ Encontrado y Verificado", "visitas": celda.get_text(strip=True), "enlace": url_stats}
-        
-        return {"estado": "❌ No encontrado (Falsos positivos descartados)", "visitas": None, "enlace": None}
-            
-    except Exception:
-        return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
+                celda = BeautifulSoup(res_stats.text, 'html.parser').find('td', class_='datacell')
+                return {"estado": "✅ Verificado", "visitas": celda.get_text(strip=True) if celda else "0", "enlace": url_stats}
+        return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
+    except: return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
 
 def extraer_uca(doi):
-    """Módulo para RODIN (Cádiz) con VERIFICACIÓN DE DOI"""
+    """Módulo para RODIN (Cádiz) con VERIFICACIÓN"""
     url_base = "https://rodin.uca.es"
     url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
-    
     try:
         res_busqueda = sesion.get(url_busqueda, headers=CABECERAS, timeout=20, verify=False)
         sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
         enlaces = sopa_busqueda.find_all('a', href=re.compile(r'handle/\d+/\d+'))
         
-        if not enlaces:
-            return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
+        if not enlaces: return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
 
         for link in enlaces[:3]:
             handle_path = re.search(r'(handle/\d+/\d+)', link['href']).group(1)
             url_articulo = f"{url_base}/{handle_path}"
-            
             res_art = sesion.get(url_articulo, headers=CABECERAS, timeout=15, verify=False)
             if doi.lower() in res_art.text.lower():
                 url_stats = f"{url_articulo}/statistics"
                 res_stats = sesion.get(url_stats, headers=CABECERAS, timeout=15, verify=False)
-                sopa_stats = BeautifulSoup(res_stats.text, 'html.parser')
-                celda = sopa_stats.find('td', class_='datacell')
-                
-                if celda:
-                    return {"estado": "✅ Encontrado y Verificado", "visitas": celda.get_text(strip=True), "enlace": url_stats}
-        
+                celda = BeautifulSoup(res_stats.text, 'html.parser').find('td', class_='datacell')
+                return {"estado": "✅ Verificado", "visitas": celda.get_text(strip=True) if celda else "0", "enlace": url_stats}
         return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
-            
-    except Exception:
-        return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
+    except: return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
 
 def extraer_upo(doi):
-    """Módulo para RIO (Olavide) - DSpace 7 API"""
+    """Módulo para RIO (Olavide) - DSpace 7 API REFORZADO"""
     url_base = "https://rio.upo.es"
     sesion = crear_sesion_robusta()
+    
+    # Cabeceras específicas para la API de DSpace 7
+    headers_api = CABECERAS.copy()
+    headers_api['Accept'] = 'application/hal+json'
+    
     try:
-        url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi}"
-        res_busqueda = sesion.get(url_api_busqueda, headers=CABECERAS, timeout=20, verify=False)
+        # 1. Búsqueda del UUID
+        url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi}&f.entityType=Publication,equals"
+        res_busqueda = sesion.get(url_api_busqueda, headers=headers_api, timeout=25, verify=False)
+        res_busqueda.raise_for_status()
         datos = res_busqueda.json()
         
-        if "_embedded" in datos and "searchObjects" in datos["_embedded"]:
-            # Verificamos que el DOI esté en el primer objeto devuelto por la API
+        if "_embedded" in datos and "searchObjects" in datos["_embedded"] and len(datos["_embedded"]["searchObjects"]) > 0:
             objeto = datos["_embedded"]["searchObjects"][0]
             uuid = objeto["_embedded"]["indexableObject"]["uuid"]
             
-            # Llamada a la API de estadísticas
+            # 2. Consulta de estadísticas totales
             url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid}&type=item"
-            res_stats = sesion.get(url_api_stats, headers=CABECERAS, timeout=20, verify=False)
+            res_stats = sesion.get(url_api_stats, headers=headers_api, timeout=20, verify=False)
+            res_stats.raise_for_status()
             total = res_stats.json().get("total", 0)
             
-            return {"estado": "✅ Encontrado (API)", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid}"}
+            return {
+                "estado": "✅ Encontrado (API)", 
+                "visitas": str(total), 
+                "enlace": f"{url_base}/statistics/items/{uuid}"
+            }
         
         return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
-    except Exception:
-        return {"estado": "⚠️ Error API", "visitas": None, "enlace": None}
+    except Exception as e:
+        # Devolvemos el tipo de error para diagnóstico
+        return {"estado": f"⚠️ Error API: {type(e).__name__}", "visitas": None, "enlace": None}
 
 # ==========================================
-# 2. DIRECTORIO Y MOTOR EN PARALELO
+# 2. MOTOR DE BÚSQUEDA SIMULTÁNEA
 # ==========================================
 REPOSITORIOS = {
     "Helvia (Córdoba)": extraer_uco,
@@ -139,28 +131,28 @@ REPOSITORIOS = {
 # 3. INTERFAZ STREAMLIT
 # ==========================================
 st.set_page_config(page_title="Impacto Andalucía", layout="centered")
-st.title("🌍 Buscador de Impacto: Red de Repositorios")
+st.title("🌍 Monitor de Impacto Andalucía")
 
-doi_input = st.text_input("Introduce el DOI:", placeholder="10.3390/healthcare9091216").strip()
+doi_input = st.text_input("Introduce el DOI del artículo:", placeholder="10.3390/healthcare9091216").strip()
 
 if st.button("🚀 Iniciar Rastreo"):
     if doi_input:
         st.subheader("📡 Informe de Búsqueda")
         resultados_finales = {}
         
-        with st.spinner("Consultando todos los repositorios a la vez..."):
+        with st.spinner("Lanzando drones de búsqueda a las universidades..."):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ejecutor:
                 futuros = {ejecutor.submit(func, doi_input): nombre for nombre, func in REPOSITORIOS.items()}
                 for futuro in concurrent.futures.as_completed(futuros):
                     resultados_finales[futuros[futuro]] = futuro.result()
         
-        # Mostrar resultados
+        # Mostrar resultados en orden
         for nombre in REPOSITORIOS.keys():
             res = resultados_finales.get(nombre)
             with st.expander(f"📌 {nombre} - {res['estado']}", expanded=True):
                 if res['visitas']:
-                    st.metric("Visualizaciones", res['visitas'])
+                    st.metric("Visualizaciones Totales", res['visitas'])
                 if res['enlace']:
-                    st.write(f"🔗 [Ver estadísticas oficiales]({res['enlace']})")
+                    st.write(f"🔗 [Enlace oficial a la fuente]({res['enlace']})")
     else:
-        st.error("Introduce un DOI.")
+        st.error("Por favor, introduce un DOI.")
