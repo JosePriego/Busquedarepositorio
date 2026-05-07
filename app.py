@@ -10,17 +10,18 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # ==========================================
 # 1. DIRECTORIO DE REPOSITORIOS (ANDALUCÍA)
 # ==========================================
+# Añadimos un "interruptor" (es_dspace7) a nuestro diccionario.
 REPOSITORIOS_ANDALUCIA = {
-    "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "idUS (Sevilla)": {"url_base": "https://idus.us.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "Digibug (Granada)": {"url_base": "https://digibug.ugr.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "RODIN (Cádiz)": {"url_base": "https://rodin.uca.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "riUAL (Almería)": {"url_base": "https://repositorio.ual.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "patron_handle": r'handle/(\d+/\d+)'},
-    "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "patron_handle": r'handle/(\d+/\d+)'}
+    "Helvia (Córdoba)": {"url_base": "https://helvia.uco.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "idUS (Sevilla)": {"url_base": "https://idus.us.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "Digibug (Granada)": {"url_base": "https://digibug.ugr.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "RODIN (Cádiz)": {"url_base": "https://rodin.uca.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "riUAL (Almería)": {"url_base": "https://repositorio.ual.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "Arias Montano (Huelva)": {"url_base": "https://ariasmontano.uhu.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "Ruja (Jaén)": {"url_base": "https://ruja.ujaen.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "Riuma (Málaga)": {"url_base": "https://riuma.uma.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False},
+    "RIO (Olavide)": {"url_base": "https://rio.upo.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": True}, # ¡Activamos el modo DSpace 7!
+    "UNIA (Andalucía)": {"url_base": "https://dspace.unia.es", "patron_handle": r'handle/(\d+/\d+)', "es_dspace7": False}
 }
 
 CABECERAS_CLASICAS = {
@@ -34,10 +35,38 @@ CABECERAS_CLASICAS = {
 def procesar_un_repositorio(nombre_repo, config, doi):
     url_base = config["url_base"]
     patron_regex = config["patron_handle"]
+    es_dspace7 = config.get("es_dspace7", False)
+    
     estado_final = "❌ No encontrado"
     datos_utiles = None
 
-    # QUITAMOS LAS COMILLAS %22 PARA QUE LA UPO FUNCIONE
+    # ESTRATEGIA A: Para repositorios modernos (UPO)
+    if es_dspace7:
+        # Usamos la puerta trasera (API) y forzamos las comillas para precisión
+        url_api = f"{url_base}/server/api/discover/search/objects?query=%22{doi}%22"
+        try:
+            res = requests.get(url_api, headers=CABECERAS_CLASICAS, timeout=15, verify=False)
+            res.raise_for_status()
+            
+            # La API devuelve un texto puro. Buscamos cualquier Handle que aparezca dentro.
+            match = re.search(r'(\d{4,5}/\d+)', res.text)
+            
+            if match:
+                posible_handle = match.group(1)
+                # Verificamos si realmente el DOI está asociado a este artículo
+                url_item_api = f"{url_base}/server/api/core/items/{posible_handle}" # Endpoint genérico
+                # Para simplificar y asegurar, verificamos el DOI en el texto crudo de la respuesta inicial
+                if doi.lower() in res.text.lower():
+                    datos_utiles = {"url_base": url_base, "handle": posible_handle}
+                    estado_final = "✅ Encontrado"
+
+        except Exception as e:
+            estado_final = f"⚠️ Error API: {type(e).__name__}"
+
+        return {"nombre_repo": nombre_repo, "estado": estado_final, "datos_utiles": datos_utiles}
+
+
+    # ESTRATEGIA B: Para repositorios clásicos (HTML) (UCO, US, UGR...)
     RUTAS_COMUNES = [
         "/discover?query={doi}",        
         "/search?query={doi}",          
@@ -58,32 +87,27 @@ def procesar_un_repositorio(nombre_repo, config, doi):
             enlaces = sopa.find_all('a', href=re.compile(patron_regex))
             
             handle_verificado = False
-            
             if enlaces:
-                # Extraemos Handles únicos para no procesar duplicados de la misma página
                 handles_unicos = []
                 for enlace in enlaces:
                     match = re.search(patron_regex, enlace['href'])
                     if match and match.group(1) not in handles_unicos:
                         handles_unicos.append(match.group(1))
                 
-                # --- FILTRO DE VERACIDAD ---
-                # Visitamos solo los 3 primeros resultados para confirmar si el DOI está dentro
                 for posible_handle in handles_unicos[:3]:
                     url_item = f"{url_base}/handle/{posible_handle}"
                     try:
                         res_item = requests.get(url_item, headers=CABECERAS_CLASICAS, timeout=10, verify=False)
-                        # Si el texto del DOI aparece literalmente en la página del artículo:
                         if doi.lower() in res_item.text.lower():
                             datos_utiles = {"url_base": url_base, "handle": posible_handle}
                             estado_final = "✅ Encontrado"
                             handle_verificado = True
-                            break # Encontramos el real, salimos del bucle de verificación
+                            break 
                     except:
-                        continue # Si falla la conexión de este artículo, probamos el siguiente
+                        continue 
             
             if handle_verificado:
-                break # Salimos del bucle de rutas, éxito total
+                break 
                 
         except requests.exceptions.HTTPError as e:
             estado_final = f"⚠️ Error {e.response.status_code}"
@@ -115,6 +139,8 @@ def buscar_doi_en_andalucia_paralelo(doi):
     return registro_completo
 
 def extraer_estadisticas_universales(url_base, handle):
+    # En DSpace 7, las estadísticas a veces se muestran igual en /statistics, 
+    # pero vamos a intentar la ruta estándar por si mantienen compatibilidad.
     url_estadisticas = f"{url_base}/handle/{handle}/statistics"
     try:
         res = requests.get(url_estadisticas, headers=CABECERAS_CLASICAS, timeout=15, verify=False)
@@ -125,9 +151,9 @@ def extraer_estadisticas_universales(url_base, handle):
         if celda_numero:
             return celda_numero.get_text(strip=True), url_estadisticas
             
-        return "Dato no encontrado", url_estadisticas
+        return "Dato no visible públicamente en HTML", url_estadisticas
     except Exception:
-        return f"Error de lectura", url_estadisticas
+        return f"Error de lectura (posible API requerida)", url_estadisticas
 
 # ==========================================
 # 3. INTERFAZ DE USUARIO (STREAMLIT)
@@ -141,7 +167,7 @@ doi_input = st.text_input("Introduce el DOI:", placeholder="Ejemplo: 10.3390/cel
 
 if st.button("Rastrear en Andalucía"):
     if doi_input:
-        with st.spinner("🚀 Lanzando búsqueda inteligente y verificando resultados..."):
+        with st.spinner("🚀 Explorando bases de datos (HTML y API) en paralelo..."):
             registro_busqueda = buscar_doi_en_andalucia_paralelo(doi_input)
             
             st.subheader("📡 Informe de Búsqueda")
