@@ -7,6 +7,7 @@ import re
 import urllib3
 import time
 import concurrent.futures
+import cloudscraper # <--- NUESTRA NUEVA ARMA SECRETA
 
 # Silenciamos las advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -33,7 +34,7 @@ def crear_sesion_robusta():
 # ==========================================
 
 def extraer_uco(doi):
-    """Módulo para Helvia (Córdoba) con VERIFICACIÓN"""
+    """Módulo para Helvia (Córdoba)"""
     url_base = "https://helvia.uco.es"
     url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
@@ -57,7 +58,7 @@ def extraer_uco(doi):
     except: return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
 
 def extraer_uca(doi):
-    """Módulo para RODIN (Cádiz) con VERIFICACIÓN"""
+    """Módulo para RODIN (Cádiz)"""
     url_base = "https://rodin.uca.es"
     url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
@@ -81,47 +82,48 @@ def extraer_uca(doi):
     except: return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
 
 def extraer_upo(doi):
-    """Módulo para RIO (Olavide) - DSpace 7 API (Evasión de Bloqueos)"""
+    """Módulo para RIO (Olavide) - Modo Evasión de Cortafuegos"""
     url_base = "https://rio.upo.es"
-    sesion = crear_sesion_robusta()
     
-    # Hacemos el disfraz de la API más natural
-    headers_api = CABECERAS.copy()
-    headers_api['Accept'] = 'application/json, application/hal+json, text/plain, */*'
+    # Usamos cloudscraper en lugar de requests normal para saltar el bloqueo
+    scraper = cloudscraper.create_scraper(browser={
+        'browser': 'chrome',
+        'platform': 'windows',
+        'desktop': True
+    })
     
-    # TRUCO: Cambiamos la barra del DOI para que no rompa la URL de la API
+    headers_api = {'Accept': 'application/json, application/hal+json'}
     doi_seguro = doi.replace('/', '%2F')
     
     try:
         url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi_seguro}"
-        res_busqueda = sesion.get(url_api_busqueda, headers=headers_api, timeout=25, verify=False)
+        res_busqueda = scraper.get(url_api_busqueda, headers=headers_api, timeout=25, verify=False)
         
-        # CHIVATO: Si el servidor nos corta el paso, nos chivará el número de error
         if res_busqueda.status_code != 200:
-             return {"estado": f"⚠️ Bloqueo de seguridad en UPO (Código {res_busqueda.status_code})", "visitas": None, "enlace": None}
+             return {"estado": f"⚠️ Cortafuegos persistente (Código {res_busqueda.status_code})", "visitas": None, "enlace": None}
              
         try:
             datos = res_busqueda.json()
         except:
-            return {"estado": "⚠️ UPO devolvió una página de bloqueo (Cortafuegos)", "visitas": None, "enlace": None}
+            return {"estado": "⚠️ Bloqueo profundo de la UPO", "visitas": None, "enlace": None}
         
         if "_embedded" in datos and "searchObjects" in datos["_embedded"] and len(datos["_embedded"]["searchObjects"]) > 0:
             objeto = datos["_embedded"]["searchObjects"][0]
             uuid = objeto["_embedded"]["indexableObject"]["uuid"]
             
-            # Consulta de estadísticas
             url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid}&type=item"
-            res_stats = sesion.get(url_api_stats, headers=headers_api, timeout=20, verify=False)
+            res_stats = scraper.get(url_api_stats, headers=headers_api, timeout=20, verify=False)
             
             if res_stats.status_code == 200:
                 total = res_stats.json().get("total", 0)
-                return {"estado": "✅ Encontrado (API)", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid}"}
+                return {"estado": "✅ Encontrado (API Blindada)", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid}"}
             else:
-                return {"estado": "✅ Encontrado (Pero estadísticas bloqueadas)", "visitas": None, "enlace": f"{url_base}/statistics/items/{uuid}"}
+                return {"estado": "✅ Encontrado (Pero estadísticas protegidas)", "visitas": None, "enlace": f"{url_base}/statistics/items/{uuid}"}
         
         return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
     except Exception as e:
-        return {"estado": f"⚠️ Error en comunicación: {type(e).__name__}", "visitas": None, "enlace": None}
+        return {"estado": f"⚠️ Error del Scraper: {type(e).__name__}", "visitas": None, "enlace": None}
+
 # ==========================================
 # 2. MOTOR DE BÚSQUEDA SIMULTÁNEA
 # ==========================================
@@ -144,7 +146,7 @@ if st.button("🚀 Iniciar Rastreo"):
         st.subheader("📡 Informe de Búsqueda")
         resultados_finales = {}
         
-        with st.spinner("Lanzando drones de búsqueda..."):
+        with st.spinner("Lanzando búsqueda fantasma a las bases de datos..."):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ejecutor:
                 futuros = {ejecutor.submit(func, doi_input): nombre for nombre, func in REPOSITORIOS.items()}
                 for futuro in concurrent.futures.as_completed(futuros):
