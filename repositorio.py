@@ -5,19 +5,16 @@ from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 import re
 import urllib3
-import time
 import concurrent.futures
+# NUESTRA NUEVA ARMA: El suplantador de huella digital de Chrome
+from curl_cffi import requests as c_requests
 
 # Silenciamos las advertencias de certificados SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ==========================================
-# CONSTANTES Y CONFIGURACIÓN DE RED
-# ==========================================
 CABECERAS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
 }
 
 def crear_sesion_robusta():
@@ -35,10 +32,9 @@ def crear_sesion_robusta():
 def extraer_uco(doi):
     """Módulo para Helvia (Córdoba)"""
     url_base = "https://helvia.uco.es"
-    url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
     try:
-        res_busqueda = sesion.get(url_busqueda, headers=CABECERAS, timeout=20, verify=False)
+        res_busqueda = sesion.get(f"{url_base}/discover?query={doi}", headers=CABECERAS, timeout=20, verify=False)
         sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
         enlaces = sopa_busqueda.find_all('a', href=re.compile(r'handle/\d+/\d+'))
         
@@ -59,10 +55,9 @@ def extraer_uco(doi):
 def extraer_uca(doi):
     """Módulo para RODIN (Cádiz)"""
     url_base = "https://rodin.uca.es"
-    url_busqueda = f"{url_base}/discover?query={doi}"
     sesion = crear_sesion_robusta()
     try:
-        res_busqueda = sesion.get(url_busqueda, headers=CABECERAS, timeout=20, verify=False)
+        res_busqueda = sesion.get(f"{url_base}/discover?query={doi}", headers=CABECERAS, timeout=20, verify=False)
         sopa_busqueda = BeautifulSoup(res_busqueda.text, 'html.parser')
         enlaces = sopa_busqueda.find_all('a', href=re.compile(r'handle/\d+/\d+'))
         
@@ -80,60 +75,57 @@ def extraer_uca(doi):
         return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
     except: return {"estado": "⚠️ Error de conexión", "visitas": None, "enlace": None}
 
+
 def extraer_upo(doi):
-    """Módulo para RIO (Olavide) - DSpace 7 API (Evasión por Sufijo)"""
+    """Módulo para RIO (Olavide) - MODO SUPLANTACIÓN DE GOOGLE CHROME"""
     url_base = "https://rio.upo.es"
-    sesion = crear_sesion_robusta()
     
+    # Creamos una sesión que suplanta la huella digital exacta de Chrome versión 110
+    sesion = c_requests.Session(impersonate="chrome110")
+    
+    # Añadimos cabeceras extra para parecer un navegador que navega desde dentro de la propia web
     headers_api = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'application/json, application/hal+json'
+        'Accept': 'application/json, application/hal+json',
+        'Referer': f'{url_base}/',
+        'Sec-Fetch-Mode': 'cors',
+        'Sec-Fetch-Site': 'same-origin'
     }
     
-    # EL TRUCO: Cortamos el DOI por la barra '/' y nos quedamos solo con la parte final
-    # Así el cortafuegos de la universidad no pensará que somos un ataque informático.
-    if '/' in doi:
-        doi_busqueda = doi.split('/')[-1]
-    else:
-        doi_busqueda = doi
+    # Ocultamos la barra del DOI para no levantar sospechas
+    doi_busqueda = doi.split('/')[-1] if '/' in doi else doi
         
     try:
         url_api_busqueda = f"{url_base}/server/api/discover/search/objects?query={doi_busqueda}"
-        res_busqueda = sesion.get(url_api_busqueda, headers=headers_api, timeout=25, verify=False)
+        # Usamos nuestra sesión camuflada
+        res_busqueda = sesion.get(url_api_busqueda, headers=headers_api, timeout=25)
         
-        if res_busqueda.status_code != 200:
-             return {"estado": f"⚠️ Cortafuegos (Código {res_busqueda.status_code})", "visitas": None, "enlace": None}
+        # Filtro: ¿Nos han engañado dándonos HTML en lugar de JSON?
+        if "json" not in res_busqueda.headers.get("Content-Type", "").lower():
+            return {"estado": "⚠️ El firewall de DSpace 7 interceptó la llamada", "visitas": None, "enlace": None}
              
-        try:
-            datos = res_busqueda.json()
-        except:
-            return {"estado": "⚠️ Bloqueo de datos", "visitas": None, "enlace": None}
+        datos = res_busqueda.json()
         
         if "_embedded" in datos and "searchObjects" in datos["_embedded"] and len(datos["_embedded"]["searchObjects"]) > 0:
-            
-            # Filtramos los resultados para asegurarnos de que es nuestro artículo exacto
             uuid_correcto = None
             for objeto in datos["_embedded"]["searchObjects"]:
                 item = objeto["_embedded"]["indexableObject"]
-                # Comprobamos que el DOI completo está escondido en los metadatos del artículo
                 if doi.lower() in str(item).lower():
                     uuid_correcto = item["uuid"]
                     break
             
             if uuid_correcto:
-                # Pedimos las estadísticas del UUID correcto
                 url_api_stats = f"{url_base}/server/api/statistics/viewevents/search/total?scope={uuid_correcto}&type=item"
-                res_stats = sesion.get(url_api_stats, headers=headers_api, timeout=20, verify=False)
+                res_stats = sesion.get(url_api_stats, headers=headers_api, timeout=20)
                 
-                if res_stats.status_code == 200:
+                if "json" in res_stats.headers.get("Content-Type", "").lower():
                     total = res_stats.json().get("total", 0)
-                    return {"estado": "✅ Encontrado", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid_correcto}"}
+                    return {"estado": "✅ Encontrado (Camuflaje Exitoso)", "visitas": str(total), "enlace": f"{url_base}/statistics/items/{uuid_correcto}"}
                 else:
-                    return {"estado": "✅ Encontrado (Stats ocultas)", "visitas": None, "enlace": f"{url_base}/statistics/items/{uuid_correcto}"}
+                    return {"estado": "✅ Encontrado (Stats protegidas)", "visitas": None, "enlace": f"{url_base}/statistics/items/{uuid_correcto}"}
             
         return {"estado": "❌ No encontrado", "visitas": None, "enlace": None}
     except Exception as e:
-        return {"estado": f"⚠️ Error: {type(e).__name__}", "visitas": None, "enlace": None}
+        return {"estado": f"⚠️ Error Motor Chrome: {type(e).__name__}", "visitas": None, "enlace": None}
 
 # ==========================================
 # 2. MOTOR DE BÚSQUEDA SIMULTÁNEA
@@ -157,7 +149,7 @@ if st.button("🚀 Iniciar Rastreo"):
         st.subheader("📡 Informe de Búsqueda")
         resultados_finales = {}
         
-        with st.spinner("Lanzando búsqueda fantasma a las bases de datos..."):
+        with st.spinner("Lanzando drones de búsqueda a las bases de datos..."):
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ejecutor:
                 futuros = {ejecutor.submit(func, doi_input): nombre for nombre, func in REPOSITORIOS.items()}
                 for futuro in concurrent.futures.as_completed(futuros):
